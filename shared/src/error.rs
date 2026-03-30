@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::config_error::ConfigErrors;
+
 #[derive(Debug, Error)]
 pub enum GatewayError {
     #[error("invalid OpenAPI spec: {0}")]
@@ -13,4 +15,7 @@ pub enum GatewayError {
 
     #[error("upstream error: {0}")]
     Upstream(String),
+
+    #[error(transparent)]
+    Config(#[from] ConfigErrors),
 }
