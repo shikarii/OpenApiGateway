@@ -1,0 +1,81 @@
+groups:
+  - name: gateway_alerts
+    rules:
+      # High error rate (>5% of requests returning 5xx over 5 minutes)
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(gateway_http_requests_total{status_class="5xx"}[5m]))
+          /
+          sum(rate(gateway_http_requests_total[5m]))
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate"
+          description: "More than 5% of requests are returning 5xx errors."
+
+      # Rate limit denials spiking
+      - alert: HighRateLimitDenials
+        expr: |
+          sum(rate(gateway_rate_limit_denied_total[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit denial rate"
+          description: "Rate limit denials exceed 10/sec sustained for 5 minutes."
+
+      # Rate limiter in degraded mode (Redis down)
+      - alert: RateLimiterDegraded
+        expr: |
+          sum(rate(gateway_rate_limit_degraded_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rate limiter using in-memory fallback"
+          description: "Redis may be down. Rate limiting is operating in degraded local mode."
+
+      # Upstream failures
+      - alert: UpstreamFailures
+        expr: |
+          sum(rate(gateway_upstream_failures_total[5m])) > 1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Upstream service failures detected"
+          description: "Upstream failures exceed 1/sec sustained for 3 minutes."
+
+      # Auth failures spiking (possible attack)
+      - alert: HighAuthFailures
+        expr: |
+          sum(rate(gateway_auth_failures_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Auth failures exceed 5/sec sustained for 5 minutes."
+
+      # Config reload failures
+      - alert: ConfigReloadFailed
+        expr: |
+          increase(gateway_config_reload_total{result="validation_error"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Config reload failed"
+          description: "A configuration reload attempt failed validation."
+
+      # Gateway instance down (no metrics scraped)
+      - alert: GatewayInstanceDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway instance unreachable"
+          description: "{{ $labels.instance }} has been down for more than 1 minute."

@@ -1,0 +1,62 @@
+static_resources:
+  listeners:
+    - name: front_door
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: front_door
+                generate_request_id: true
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: gateway_backends
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: gateway_pool
+                            timeout: 15s
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: gateway_pool
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      connect_timeout: 2s
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 3
+          healthy_threshold: 1
+          http_health_check:
+            path: "/"
+      load_assignment:
+        cluster_name: gateway_pool
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: envoy-1
+                      port_value: 8080
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: envoy-2
+                      port_value: 8080
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
