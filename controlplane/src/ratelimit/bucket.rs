@@ -120,4 +120,44 @@ mod tests {
         let key = build_key("rl", "private-api", "sub", "user-123");
         assert_eq!(key, "rl:private-api:sub:user-123");
     }
+
+    #[test]
+    fn capacity_one_single_token() {
+        let mut b = LocalBucket::new(1.0, 0.0);
+        let (allowed, remaining, _) = b.try_consume();
+        assert!(allowed);
+        assert_eq!(remaining, 0);
+        let (allowed, _, retry) = b.try_consume();
+        assert!(!allowed);
+        assert_eq!(retry, u64::MAX);
+    }
+
+    #[test]
+    fn remaining_decrements_each_consume() {
+        let mut b = LocalBucket::new(5.0, 0.0);
+        for expected in (0..5).rev() {
+            let (allowed, remaining, _) = b.try_consume();
+            assert!(allowed);
+            assert_eq!(remaining, expected);
+        }
+        assert!(!b.try_consume().0);
+    }
+
+    #[test]
+    fn retry_after_formula_accuracy() {
+        // refill_rate=2.0 tokens/sec → deficit 1.0 takes 0.5s = 500ms
+        let mut b = LocalBucket::new(1.0, 2.0);
+        b.try_consume(); // consume the only token
+        let (_, _, retry) = b.try_consume();
+        // ceil((1.0 / 2.0) * 1000) = 500
+        assert_eq!(retry, 500);
+    }
+
+    #[test]
+    fn ttl_fractional_rounds_up() {
+        // ttl_seconds(3, 2.0) = ceil((3.0/2.0)*2) = ceil(3.0) = 3
+        assert_eq!(ttl_seconds(3, 2.0), 3);
+        // ttl_seconds(5, 3.0) = ceil((5.0/3.0)*2) = ceil(3.333) = 4
+        assert_eq!(ttl_seconds(5, 3.0), 4);
+    }
 }

@@ -61,4 +61,25 @@ mod tests {
         assert_eq!(resp.remaining_tokens, 0);
         assert_eq!(resp.retry_after_ms, 180);
     }
+
+    #[test]
+    fn parse_response_zero_remaining_allowed() {
+        let json = r#"{"allowed":1,"remaining_tokens":0,"retry_after_ms":0}"#;
+        let resp: LuaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.allowed, 1);
+        assert_eq!(resp.remaining_tokens, 0);
+    }
+
+    #[test]
+    fn parse_response_large_retry() {
+        let json = r#"{"allowed":0,"remaining_tokens":0,"retry_after_ms":999999}"#;
+        let resp: LuaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.retry_after_ms, 999_999);
+    }
+
+    #[test]
+    fn parse_invalid_json_fails() {
+        let bad = r#"{"allowed":}"#;
+        assert!(serde_json::from_str::<LuaResponse>(bad).is_err());
+    }
 }
