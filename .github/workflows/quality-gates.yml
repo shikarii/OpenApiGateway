@@ -35,6 +35,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
+  loc:
+    name: loc
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Rust LOC limits
+        run: bash tools/check-loc.sh
+
   build:
     name: build
     runs-on: [self-hosted, linux, x64]
