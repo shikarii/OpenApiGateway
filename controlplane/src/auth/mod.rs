@@ -21,6 +21,10 @@ use jwks_cache::JwksCache;
 #[allow(dead_code)]
 use shared::config_types::AuthProvider;
 
+#[cfg(test)]
+#[path = "integration_tests.rs"]
+mod integration_tests;
+
 #[allow(dead_code)]
 /// Validate a token, triggering a JWKS refresh if the `kid` is unknown.
 ///

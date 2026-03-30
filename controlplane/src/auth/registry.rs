@@ -64,6 +64,11 @@ impl JwksCacheRegistry {
             caches: HashMap::new(),
         })
     }
+
+    /// Create a registry from pre-built caches (no HTTP fetch).
+    pub(crate) fn from_caches_for_test(caches: HashMap<String, Arc<JwksCache>>) -> Self {
+        Self { caches }
+    }
 }
 
 #[cfg(test)]
@@ -82,5 +87,68 @@ mod tests {
             caches: HashMap::new(),
         };
         assert!(registry.get("nonexistent").is_none());
+    }
+
+    fn test_provider(name: &str, ttl: u64) -> shared::config_types::AuthProvider {
+        shared::config_types::AuthProvider {
+            name: name.into(),
+            issuer: "https://auth.example.com/".into(),
+            audience: "api-gateway".into(),
+            jwks_uri: "http://localhost/.well-known/jwks.json".into(),
+            cache_ttl_seconds: ttl,
+            clock_skew_seconds: 30,
+        }
+    }
+
+    #[tokio::test]
+    async fn all_healthy_with_fresh_caches() {
+        let mut caches = HashMap::new();
+        let now = std::time::Instant::now();
+        caches.insert(
+            "a".into(),
+            JwksCache::for_test(test_provider("a", 300), vec![], now),
+        );
+        caches.insert(
+            "b".into(),
+            JwksCache::for_test(test_provider("b", 300), vec![], now),
+        );
+        let reg = JwksCacheRegistry::from_caches_for_test(caches);
+        assert!(reg.all_healthy().await);
+    }
+
+    #[tokio::test]
+    async fn unhealthy_when_any_cache_stale() {
+        let mut caches = HashMap::new();
+        let now = std::time::Instant::now();
+        let old = now - std::time::Duration::from_secs(3600);
+        caches.insert(
+            "fresh".into(),
+            JwksCache::for_test(test_provider("fresh", 300), vec![], now),
+        );
+        caches.insert(
+            "stale".into(),
+            JwksCache::for_test(test_provider("stale", 1), vec![], old),
+        );
+        let reg = JwksCacheRegistry::from_caches_for_test(caches);
+        assert!(!reg.all_healthy().await);
+    }
+
+    #[test]
+    fn get_returns_existing_provider() {
+        let mut caches = HashMap::new();
+        caches.insert(
+            "my-provider".into(),
+            JwksCache::for_test(
+                test_provider("my-provider", 300),
+                vec![],
+                std::time::Instant::now(),
+            ),
+        );
+        let reg = JwksCacheRegistry::from_caches_for_test(caches);
+        assert!(reg.get("my-provider").is_some());
+        assert_eq!(
+            reg.get("my-provider").unwrap().provider_name(),
+            "my-provider"
+        );
     }
 }

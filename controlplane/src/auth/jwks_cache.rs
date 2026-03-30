@@ -158,6 +158,26 @@ fn parse_jwks_keys(doc: &JwksDocument) -> Result<Vec<JwksKey>, AuthError> {
     Ok(keys)
 }
 
+// Test-only constructor that doesn't require HTTP.
+#[cfg(test)]
+impl JwksCache {
+    /// Build a cache with pre-loaded keys and a controlled fetch timestamp.
+    ///
+    /// The `http` client is a dummy — `fetch_and_store` should not be called.
+    pub(crate) fn for_test(
+        provider: AuthProvider,
+        keys: Vec<JwksKey>,
+        fetched_at: Instant,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            provider,
+            inner: RwLock::new(CacheInner { keys, fetched_at }),
+            refresh_notify: Arc::new(Notify::new()),
+            http: reqwest::Client::new(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::types::JwksRawKey;
@@ -197,5 +217,69 @@ mod tests {
 
         let keys = parse_jwks_keys(&doc).unwrap();
         assert!(keys.is_empty());
+    }
+
+    fn test_provider(ttl: u64) -> AuthProvider {
+        AuthProvider {
+            name: "test-provider".into(),
+            issuer: "https://auth.example.com/".into(),
+            audience: "api-gateway".into(),
+            jwks_uri: "http://localhost/.well-known/jwks.json".into(),
+            cache_ttl_seconds: ttl,
+            clock_skew_seconds: 30,
+        }
+    }
+
+    fn test_decoding_key() -> DecodingKey {
+        let pub_pem = include_bytes!("../../../test_fixtures/rsa_public.pem");
+        DecodingKey::from_rsa_pem(pub_pem).expect("test public key")
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_is_not_stale() {
+        let cache = JwksCache::for_test(test_provider(300), vec![], Instant::now());
+        assert!(!cache.is_stale().await);
+    }
+
+    #[tokio::test]
+    async fn old_cache_is_stale() {
+        let old = Instant::now() - Duration::from_secs(3600);
+        let cache = JwksCache::for_test(test_provider(1), vec![], old);
+        // Stale threshold = 1 * 10 = 10s; elapsed ~3600s → stale.
+        assert!(cache.is_stale().await);
+    }
+
+    #[tokio::test]
+    async fn get_keys_returns_loaded_keys() {
+        let key = JwksKey {
+            kid: "k1".into(),
+            decoding_key: test_decoding_key(),
+        };
+        let cache = JwksCache::for_test(test_provider(300), vec![key], Instant::now());
+        let keys = cache.get_keys().await;
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].kid, "k1");
+    }
+
+    #[test]
+    fn provider_name_returns_correct_name() {
+        let cache = JwksCache::for_test(test_provider(300), vec![], Instant::now());
+        assert_eq!(cache.provider_name(), "test-provider");
+    }
+
+    #[tokio::test]
+    async fn trigger_and_wait_notify() {
+        let cache = JwksCache::for_test(test_provider(300), vec![], Instant::now());
+        // trigger_refresh notifies one waiter; spawn a waiter then trigger.
+        let notify = Arc::clone(&cache.refresh_notify);
+        let handle = tokio::spawn(async move {
+            notify.notified().await;
+            true
+        });
+        // Small yield to ensure the spawned task registers the waiter.
+        tokio::task::yield_now().await;
+        cache.trigger_refresh();
+        let got = handle.await.expect("task panicked");
+        assert!(got);
     }
 }
