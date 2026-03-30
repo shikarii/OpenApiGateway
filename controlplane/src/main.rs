@@ -39,6 +39,20 @@ async fn main() {
     });
 
     tracing::info!("controlplane starting");
+
+    // Phase 2.5: Generate and write Envoy config (if path set).
+    if let Ok(envoy_path) = std::env::var("ENVOY_CONFIG_PATH") {
+        let envoy_yaml = config::generate_envoy_config(&cfg).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "failed to generate envoy config");
+            std::process::exit(1);
+        });
+        std::fs::write(&envoy_path, envoy_yaml).unwrap_or_else(|e| {
+            tracing::error!(path = %envoy_path, error = %e, "failed to write envoy config");
+            std::process::exit(1);
+        });
+        tracing::info!(path = %envoy_path, "envoy config written");
+    }
+
     let admin_addr = cfg.gateway.admin_address.clone();
     tracing::info!(
         version = cfg.version,
