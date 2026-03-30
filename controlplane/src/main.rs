@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 mod admin;
 mod auth;
 mod config;
+mod ratelimit;
 
 #[tokio::main]
 async fn main() {
@@ -54,7 +55,13 @@ async fn main() {
     };
     jwks_registry.spawn_all_refresh_loops();
 
-    let state = admin::state::build_state(cfg, &raw_yaml, config_path, jwks_registry);
+    let rate_limiter = ratelimit::RateLimiter::from_config(&cfg.rate_limits).await;
+    tracing::info!(
+        redis_reachable = rate_limiter.ping().await,
+        "rate limiter initialized"
+    );
+
+    let state = admin::state::build_state(cfg, &raw_yaml, config_path, jwks_registry, rate_limiter);
     let app = admin::router(state);
 
     let listener = TcpListener::bind(&admin_addr).await.unwrap_or_else(|e| {
