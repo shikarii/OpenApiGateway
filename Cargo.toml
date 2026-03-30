@@ -24,3 +24,6 @@ prost = "0.13"
 thiserror = "2"
 serde_yaml = "0.9"
 url = "2"
+axum = "0.7"
+sha2 = "0.10"
+tower = { version = "0.5", features = ["util"] }
