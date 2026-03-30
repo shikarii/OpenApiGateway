@@ -7,6 +7,7 @@ use shared::config_types::GatewayConfig;
 use tokio::sync::RwLock;
 
 use crate::auth::JwksCacheRegistry;
+use crate::ratelimit::RateLimiter;
 
 /// Shared application state for the admin API.
 pub(crate) type SharedState = Arc<AppState>;
@@ -16,6 +17,7 @@ pub(crate) struct AppState {
     pub config_state: RwLock<ConfigState>,
     pub config_path: PathBuf,
     pub jwks_registry: Arc<JwksCacheRegistry>,
+    pub rate_limiter: Arc<RateLimiter>,
 }
 
 /// Mutable config state protected by a `RwLock`.
@@ -64,6 +66,7 @@ pub(crate) fn build_state(
     raw_yaml: &[u8],
     config_path: PathBuf,
     jwks_registry: Arc<JwksCacheRegistry>,
+    rate_limiter: Arc<RateLimiter>,
 ) -> SharedState {
     let sha256 = sha256_hex(raw_yaml);
     let now = now_unix();
@@ -78,6 +81,7 @@ pub(crate) fn build_state(
         }),
         config_path,
         jwks_registry,
+        rate_limiter,
     })
 }
 

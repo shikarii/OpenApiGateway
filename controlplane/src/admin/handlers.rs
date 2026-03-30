@@ -23,7 +23,7 @@ pub(crate) async fn readyz(State(state): State<SharedState>) -> impl IntoRespons
     let response = ReadyResponse {
         ok: true,
         config_loaded: true,
-        redis_ok: true, // TODO(#12): real Redis check
+        redis_ok: state.rate_limiter.ping().await,
         jwks_ok,
         last_config_reload_unix: cs.last_reload_unix,
     };
@@ -149,11 +149,13 @@ mod tests {
         let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
         let cfg = config::load_config_from_str(yaml).unwrap();
         let jwks_registry = crate::auth::JwksCacheRegistry::empty_for_test();
+        let rate_limiter = crate::ratelimit::RateLimiter::offline_for_test(cfg.rate_limits.clone());
         let state = build_state(
             cfg,
             yaml.as_bytes(),
             PathBuf::from("nonexistent.yaml"),
             jwks_registry,
+            rate_limiter,
         );
 
         Router::new()
