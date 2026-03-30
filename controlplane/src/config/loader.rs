@@ -6,6 +6,7 @@ use shared::config_types::GatewayConfig;
 use super::validation;
 
 /// Load and validate a gateway config from a YAML file.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn load_config(path: &Path) -> Result<GatewayConfig, ConfigErrors> {
     let contents = std::fs::read_to_string(path).map_err(|e| {
         ConfigErrors::new(vec![ConfigError::YamlParse(format!(
