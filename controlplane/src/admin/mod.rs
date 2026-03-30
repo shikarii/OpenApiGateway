@@ -19,5 +19,6 @@ pub(crate) fn router(state: SharedState) -> Router {
             "/config/reload",
             axum::routing::post(handlers::config_reload),
         )
+        .route("/metrics", axum::routing::get(handlers::metrics))
         .with_state(state)
 }
