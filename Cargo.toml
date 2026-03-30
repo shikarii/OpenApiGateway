@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+  "dataplane",
+  "controlplane",
+  "shared",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/shikarii/OpenApiGateway"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tonic = "0.12"
+prost = "0.13"
+thiserror = "2"
