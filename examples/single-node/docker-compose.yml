@@ -1,0 +1,101 @@
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: gateway-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - gateway
+
+  echo-backend:
+    image: ealen/echo-server:latest
+    container_name: gateway-backend
+    environment:
+      PORT: 8081
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - gateway
+
+  fake-jwks:
+    image: ghcr.io/navidstuart/fake-jwks-server:latest
+    container_name: gateway-jwks
+    ports:
+      - "7001:3000"
+    environment:
+      PRIVATE_KEY_PATH: /jwks/private.pem
+    volumes:
+      - ./jwks:/jwks
+    networks:
+      - gateway
+
+  gateway-manager:
+    build:
+      context: ../..
+      dockerfile: ./services/gateway-manager/Dockerfile
+    container_name: gateway-manager
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ../../configs:/app/configs
+    environment:
+      GATEWAY_CONFIG_PATH: /app/configs/gateway.yaml
+      ENVOY_CONFIG_PATH: /app/configs/envoy.yaml
+      LOG_LEVEL: info
+    depends_on:
+      redis:
+        condition: service_healthy
+      echo-backend:
+        condition: service_healthy
+    networks:
+      - gateway
+
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: gateway-envoy
+    ports:
+      - "80:10000"
+    volumes:
+      - ../../configs/envoy.yaml:/etc/envoy/envoy.yaml
+    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+    depends_on:
+      - gateway-manager
+    networks:
+      - gateway
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gateway-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - gateway
+
+volumes:
+  redis_data:
+  prometheus_data:
+
+networks:
+  gateway:
+    driver: bridge
