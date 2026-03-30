@@ -103,6 +103,12 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
 
     // Auth providers
     for p in &cfg.auth.providers {
+        if p.name.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: "auth.providers[].name".into(),
+                reason: "must not be empty".into(),
+            });
+        }
         if Url::parse(&p.jwks_uri).is_err() {
             errs.push(ConfigError::InvalidValue {
                 field: format!("auth.providers[{}].jwks_uri", p.name),
@@ -127,6 +133,25 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
     // Routes
     for r in &cfg.routes {
         let prefix = format!("routes[{}]", r.name);
+
+        if r.name.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: "routes[].name".into(),
+                reason: "must not be empty".into(),
+            });
+        }
+        if r.hostnames.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: format!("{prefix}.hostnames"),
+                reason: "must not be empty".into(),
+            });
+        }
+        if r.methods.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: format!("{prefix}.methods"),
+                reason: "must not be empty".into(),
+            });
+        }
 
         if !r.path_prefix.starts_with('/') {
             errs.push(ConfigError::InvalidValue {
@@ -169,6 +194,19 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
     // Services
     for s in &cfg.services {
         let prefix = format!("services[{}]", s.name);
+
+        if s.name.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: "services[].name".into(),
+                reason: "must not be empty".into(),
+            });
+        }
+        if s.endpoints.is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: format!("{prefix}.endpoints"),
+                reason: "must not be empty".into(),
+            });
+        }
 
         for ep in &s.endpoints {
             validate_host_port(ep, &format!("{prefix}.endpoints"), errs);
@@ -233,3 +271,7 @@ fn validate_host_port(value: &str, field: &str, errs: &mut Vec<ConfigError>) {
 #[cfg(test)]
 #[path = "validation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "validation_edge_tests.rs"]
+mod edge_tests;
