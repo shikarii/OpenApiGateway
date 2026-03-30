@@ -22,3 +22,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tonic = "0.12"
 prost = "0.13"
 thiserror = "2"
+serde_yaml = "0.9"
+url = "2"
