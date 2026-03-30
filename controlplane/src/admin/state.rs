@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use shared::config_types::GatewayConfig;
 use tokio::sync::RwLock;
 
+use crate::auth::JwksCacheRegistry;
+
 /// Shared application state for the admin API.
 pub(crate) type SharedState = Arc<AppState>;
 
@@ -13,6 +15,7 @@ pub(crate) type SharedState = Arc<AppState>;
 pub(crate) struct AppState {
     pub config_state: RwLock<ConfigState>,
     pub config_path: PathBuf,
+    pub jwks_registry: Arc<JwksCacheRegistry>,
 }
 
 /// Mutable config state protected by a `RwLock`.
@@ -60,6 +63,7 @@ pub(crate) fn build_state(
     config: GatewayConfig,
     raw_yaml: &[u8],
     config_path: PathBuf,
+    jwks_registry: Arc<JwksCacheRegistry>,
 ) -> SharedState {
     let sha256 = sha256_hex(raw_yaml);
     let now = now_unix();
@@ -73,6 +77,7 @@ pub(crate) fn build_state(
             last_reload_error: None,
         }),
         config_path,
+        jwks_registry,
     })
 }
 

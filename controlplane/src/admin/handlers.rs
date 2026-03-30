@@ -19,12 +19,12 @@ pub(crate) async fn readyz(State(state): State<SharedState>) -> impl IntoRespons
     let cs = state.config_state.read().await;
 
     // Config is always loaded after startup (we exit on failure).
-    // Redis and JWKS checks are stubbed until those subsystems exist.
+    let jwks_ok = state.jwks_registry.all_healthy().await;
     let response = ReadyResponse {
         ok: true,
         config_loaded: true,
         redis_ok: true, // TODO(#12): real Redis check
-        jwks_ok: true,  // TODO(#11): real JWKS check
+        jwks_ok,
         last_config_reload_unix: cs.last_reload_unix,
     };
 
@@ -148,7 +148,13 @@ mod tests {
     fn test_router() -> Router {
         let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
         let cfg = config::load_config_from_str(yaml).unwrap();
-        let state = build_state(cfg, yaml.as_bytes(), PathBuf::from("nonexistent.yaml"));
+        let jwks_registry = crate::auth::JwksCacheRegistry::empty_for_test();
+        let state = build_state(
+            cfg,
+            yaml.as_bytes(),
+            PathBuf::from("nonexistent.yaml"),
+            jwks_registry,
+        );
 
         Router::new()
             .route("/healthz", axum::routing::get(healthz))
