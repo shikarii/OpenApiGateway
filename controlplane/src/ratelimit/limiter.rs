@@ -244,6 +244,10 @@ impl RateLimiter {
 }
 
 #[cfg(test)]
+#[path = "limiter_ext_tests.rs"]
+mod ext_tests;
+
+#[cfg(test)]
 mod tests {
     use shared::config_types::SurvivabilityMode;
 
