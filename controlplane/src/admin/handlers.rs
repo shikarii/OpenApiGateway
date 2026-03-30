@@ -44,6 +44,25 @@ pub(crate) async fn config_status(State(state): State<SharedState>) -> Json<Conf
     })
 }
 
+/// `GET /metrics` -- Prometheus text exposition metrics.
+pub(crate) async fn metrics(State(state): State<SharedState>) -> impl IntoResponse {
+    match state.metrics.encode() {
+        Ok(body) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to encode metrics");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// `POST /config/reload` -- reload config from disk.
 pub(crate) async fn config_reload(State(state): State<SharedState>) -> impl IntoResponse {
     let now = now_unix();
@@ -57,6 +76,7 @@ pub(crate) async fn config_reload(State(state): State<SharedState>) -> impl Into
             cs.last_reload_unix = now;
             cs.last_reload_result = ReloadResult::ValidationError;
             cs.last_reload_error = Some(error_msg.clone());
+            state.metrics.record_config_reload("validation_error");
 
             return (
                 StatusCode::BAD_REQUEST,
@@ -87,6 +107,7 @@ pub(crate) async fn config_reload(State(state): State<SharedState>) -> impl Into
             cs.last_reload_unix = now;
             cs.last_reload_result = ReloadResult::Success;
             cs.last_reload_error = None;
+            state.metrics.record_config_reload("success");
 
             tracing::info!(
                 previous_sha256 = %previous_sha,
@@ -114,6 +135,7 @@ pub(crate) async fn config_reload(State(state): State<SharedState>) -> impl Into
             cs.last_reload_unix = now;
             cs.last_reload_result = ReloadResult::ValidationError;
             cs.last_reload_error = Some(error_msg.clone());
+            state.metrics.record_config_reload("validation_error");
 
             tracing::warn!(%errs, "config reload validation failed");
 
@@ -150,12 +172,15 @@ mod tests {
         let cfg = config::load_config_from_str(yaml).unwrap();
         let jwks_registry = crate::auth::JwksCacheRegistry::empty_for_test();
         let rate_limiter = crate::ratelimit::RateLimiter::offline_for_test(cfg.rate_limits.clone());
+        let metrics_registry =
+            std::sync::Arc::new(crate::observability::MetricsRegistry::new().unwrap());
         let state = build_state(
             cfg,
             yaml.as_bytes(),
             PathBuf::from("nonexistent.yaml"),
             jwks_registry,
             rate_limiter,
+            metrics_registry,
         );
 
         Router::new()
@@ -163,6 +188,7 @@ mod tests {
             .route("/readyz", axum::routing::get(readyz))
             .route("/config/status", axum::routing::get(config_status))
             .route("/config/reload", axum::routing::post(config_reload))
+            .route("/metrics", axum::routing::get(metrics))
             .with_state(state)
     }
 
@@ -253,5 +279,35 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], false);
+    }
+
+    #[tokio::test]
+    async fn metrics_returns_prometheus_text() {
+        let app = test_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.contains("text/plain"));
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        // IntGauge always present; CounterVec only after observation.
+        assert!(text.contains("gateway_inflight_requests"));
     }
 }

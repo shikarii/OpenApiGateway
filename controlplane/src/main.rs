@@ -2,21 +2,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use tracing_subscriber::EnvFilter;
 
 mod admin;
 mod auth;
 mod config;
+mod observability;
 mod ratelimit;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
-    tracing::info!("controlplane starting");
-
+    // Phase 1: Read config (use eprintln for errors — tracing not yet initialized).
     let config_path = std::env::var("GATEWAY_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("configs/gateway.yaml"));
@@ -24,7 +19,7 @@ async fn main() {
     let raw_yaml = match std::fs::read(&config_path) {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::error!("failed to read {}: {e}", config_path.display());
+            eprintln!("failed to read {}: {e}", config_path.display());
             std::process::exit(1);
         }
     };
@@ -32,11 +27,18 @@ async fn main() {
     let cfg = match config::load_config_from_str(&String::from_utf8_lossy(&raw_yaml)) {
         Ok(c) => c,
         Err(errs) => {
-            tracing::error!(%errs, "config validation failed");
+            eprintln!("config validation failed: {errs}");
             std::process::exit(1);
         }
     };
 
+    // Phase 2: Initialize tracing (now that we have config).
+    observability::init_tracing(&cfg.observability.tracing).unwrap_or_else(|e| {
+        eprintln!("failed to initialize tracing: {e}");
+        std::process::exit(1);
+    });
+
+    tracing::info!("controlplane starting");
     let admin_addr = cfg.gateway.admin_address.clone();
     tracing::info!(
         version = cfg.version,
@@ -45,6 +47,7 @@ async fn main() {
         "config loaded"
     );
 
+    // Phase 3: Build subsystems.
     let http_client = reqwest::Client::new();
     let jwks_registry = match auth::JwksCacheRegistry::from_config(&cfg.auth, http_client).await {
         Ok(r) => Arc::new(r),
@@ -61,7 +64,19 @@ async fn main() {
         "rate limiter initialized"
     );
 
-    let state = admin::state::build_state(cfg, &raw_yaml, config_path, jwks_registry, rate_limiter);
+    let metrics = Arc::new(observability::MetricsRegistry::new().unwrap_or_else(|e| {
+        tracing::error!(error = %e, "failed to create metrics registry");
+        std::process::exit(1);
+    }));
+
+    let state = admin::state::build_state(
+        cfg,
+        &raw_yaml,
+        config_path,
+        jwks_registry,
+        rate_limiter,
+        metrics,
+    );
     let app = admin::router(state);
 
     let listener = TcpListener::bind(&admin_addr).await.unwrap_or_else(|e| {
@@ -74,4 +89,6 @@ async fn main() {
         tracing::error!("admin API server error: {e}");
         std::process::exit(1);
     });
+
+    observability::shutdown_tracing();
 }

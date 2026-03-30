@@ -21,6 +21,12 @@ jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }
 thiserror = { workspace = true }
 redis = { workspace = true }
+prometheus = { workspace = true }
+chrono = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
