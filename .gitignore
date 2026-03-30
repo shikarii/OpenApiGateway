@@ -21,7 +21,7 @@ Thumbs.db
 .env.local
 
 # Research (private, not for open-source distribution)
-docs/research/
+docs/research/*.md
 
 # Build
 *.d
