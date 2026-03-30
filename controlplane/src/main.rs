@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 mod admin;
+mod auth;
 mod config;
 
 #[tokio::main]
@@ -42,7 +44,17 @@ async fn main() {
         "config loaded"
     );
 
-    let state = admin::state::build_state(cfg, &raw_yaml, config_path);
+    let http_client = reqwest::Client::new();
+    let jwks_registry = match auth::JwksCacheRegistry::from_config(&cfg.auth, http_client).await {
+        Ok(r) => Arc::new(r),
+        Err(e) => {
+            tracing::error!(error = %e, "JWKS initial fetch failed");
+            std::process::exit(1);
+        }
+    };
+    jwks_registry.spawn_all_refresh_loops();
+
+    let state = admin::state::build_state(cfg, &raw_yaml, config_path, jwks_registry);
     let app = admin::router(state);
 
     let listener = TcpListener::bind(&admin_addr).await.unwrap_or_else(|e| {

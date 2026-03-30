@@ -17,6 +17,9 @@ serde_yaml = { workspace = true }
 url = { workspace = true }
 axum = { workspace = true }
 sha2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
