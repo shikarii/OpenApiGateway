@@ -14,6 +14,8 @@ fn config_with_routes(routes: Vec<RouteConfig>, services: Vec<ServiceConfig>) ->
             idle_timeout_ms: 60000,
             max_request_body_bytes: 10485760,
             trust_forwarded_headers: false,
+            extauthz_address: None,
+            max_concurrent_requests: None,
         },
         auth: AuthConfig { providers: vec![] },
         rate_limits: RateLimitsConfig {

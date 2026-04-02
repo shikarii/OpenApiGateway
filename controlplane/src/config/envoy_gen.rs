@@ -1,6 +1,8 @@
 use serde_yaml::Value;
 use shared::config_types::{GatewayConfig, RouteConfig, ServiceConfig};
 
+use super::envoy_ext_authz::{build_ext_authz_cluster, build_ext_authz_filter};
+
 /// Errors from Envoy config generation.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EnvoyGenError {
@@ -15,7 +17,13 @@ pub(crate) enum EnvoyGenError {
 /// The output is a YAML string ready to write to `/etc/envoy/envoy.yaml`.
 pub(crate) fn generate_envoy_config(cfg: &GatewayConfig) -> Result<String, EnvoyGenError> {
     let listener = build_listener(cfg)?;
-    let clusters = build_clusters(&cfg.services)?;
+    let mut clusters = build_clusters(&cfg.services)?;
+
+    // Add ext_authz cluster if configured.
+    if let Some(ref addr) = cfg.gateway.extauthz_address {
+        let (host, port) = parse_endpoint(addr)?;
+        clusters.push(build_ext_authz_cluster(&host, port));
+    }
 
     let root = serde_yaml::to_value(serde_yaml::Mapping::new())?;
     let mut root = match root {
@@ -65,7 +73,12 @@ fn build_listener(cfg: &GatewayConfig) -> Result<Value, EnvoyGenError> {
 
     hcm_typed_config.insert(val("route_config"), Value::Mapping(route_config));
 
-    // Router filter
+    // HTTP filters: ext_authz (optional) → router (terminal).
+    let mut http_filters = Vec::new();
+    if cfg.gateway.extauthz_address.is_some() {
+        http_filters.push(build_ext_authz_filter());
+    }
+
     let mut router_typed = serde_yaml::Mapping::new();
     router_typed.insert(
         val("@type"),
@@ -74,11 +87,9 @@ fn build_listener(cfg: &GatewayConfig) -> Result<Value, EnvoyGenError> {
     let mut router_filter = serde_yaml::Mapping::new();
     router_filter.insert(val("name"), val("envoy.filters.http.router"));
     router_filter.insert(val("typed_config"), Value::Mapping(router_typed));
+    http_filters.push(Value::Mapping(router_filter));
 
-    hcm_typed_config.insert(
-        val("http_filters"),
-        Value::Sequence(vec![Value::Mapping(router_filter)]),
-    );
+    hcm_typed_config.insert(val("http_filters"), Value::Sequence(http_filters));
 
     let mut hcm_filter = serde_yaml::Mapping::new();
     hcm_filter.insert(
@@ -245,7 +256,7 @@ fn build_admin() -> Value {
 }
 
 /// Build an Envoy socket_address block.
-fn build_socket_address(host: &str, port: u16) -> Value {
+pub(super) fn build_socket_address(host: &str, port: u16) -> Value {
     let mut sa = serde_yaml::Mapping::new();
     sa.insert(val("address"), val(host));
     sa.insert(
@@ -292,7 +303,7 @@ fn duration_string(ms: u64) -> String {
 }
 
 /// Shorthand to create a `serde_yaml::Value::String`.
-fn val(s: &str) -> Value {
+pub(super) fn val(s: &str) -> Value {
     Value::String(s.to_owned())
 }
 

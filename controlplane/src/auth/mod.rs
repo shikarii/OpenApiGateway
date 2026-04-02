@@ -16,8 +16,7 @@ pub(crate) use registry::JwksCacheRegistry;
 #[allow(dead_code)]
 pub(crate) use types::ValidatedIdentity;
 
-#[allow(dead_code)]
-use jwks_cache::JwksCache;
+pub(crate) use jwks_cache::JwksCache;
 #[allow(dead_code)]
 use shared::config_types::AuthProvider;
 

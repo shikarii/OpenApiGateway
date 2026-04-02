@@ -12,6 +12,8 @@ fn valid_config() -> GatewayConfig {
             idle_timeout_ms: 60000,
             max_request_body_bytes: 10_485_760,
             trust_forwarded_headers: false,
+            extauthz_address: None,
+            max_concurrent_requests: None,
         },
         auth: AuthConfig {
             providers: vec![AuthProvider {

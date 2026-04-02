@@ -118,6 +118,29 @@ pub(crate) async fn config_reload(State(state): State<SharedState>) -> impl Into
             cs.last_reload_error = None;
             state.metrics.record_config_reload("success");
 
+            // Regenerate and write Envoy config if path is configured.
+            if let Some(ref envoy_path) = state.envoy_config_path {
+                match config::generate_envoy_config(&cs.config) {
+                    Ok(envoy_yaml) => {
+                        if let Err(e) = std::fs::write(envoy_path, &envoy_yaml) {
+                            tracing::warn!(
+                                path = %envoy_path.display(),
+                                error = %e,
+                                "failed to write envoy config"
+                            );
+                        } else {
+                            tracing::info!(
+                                path = %envoy_path.display(),
+                                "envoy config regenerated"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "envoy config generation failed on reload");
+                    }
+                }
+            }
+
             tracing::info!(
                 previous_sha256 = %previous_sha,
                 new_sha256 = %new_sha,
@@ -187,6 +210,7 @@ mod tests {
             cfg,
             yaml.as_bytes(),
             PathBuf::from("nonexistent.yaml"),
+            None,
             jwks_registry,
             rate_limiter,
             metrics_registry,
