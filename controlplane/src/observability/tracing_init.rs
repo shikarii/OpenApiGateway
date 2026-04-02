@@ -26,6 +26,11 @@ pub(crate) fn init_tracing(tracing_config: &TracingConfig) -> Result<(), Tracing
     let fmt_layer = tracing_subscriber::fmt::layer();
 
     if tracing_config.enabled {
+        // Register W3C TraceContext propagator for traceparent extraction/injection.
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+
         let sampler = opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
             tracing_config.sample_rate.clamp(0.0, 1.0),
         );

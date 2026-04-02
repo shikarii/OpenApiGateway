@@ -2,6 +2,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Router;
+use tracing::Instrument;
 
 use crate::admin::state::SharedState;
 use crate::observability::generate_request_id;
@@ -34,16 +35,46 @@ async fn check(State(state): State<SharedState>, req: Request) -> axum::response
 
     state.metrics.inc_inflight();
     let (parts, _body) = req.into_parts();
-    let result = check_inner(
+    let start = std::time::Instant::now();
+
+    // Create a tracing span (becomes an OTel span when tracing layer is active).
+    let span = tracing::info_span!(
+        "gateway_request",
+        http.method = parts.method.as_str(),
+        http.url = parts.uri.path(),
+        request_id = request_id.as_str(),
+        http.status_code = tracing::field::Empty,
+        route = tracing::field::Empty,
+        upstream_service = tracing::field::Empty,
+        auth_subject = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    );
+
+    // Set inbound traceparent as parent context when tracing is enabled.
+    if state.tracing_enabled {
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+        span.set_parent(extract_otel_context(&parts.headers));
+    }
+
+    let mut result = check_inner(
         &state,
         &parts.headers,
         parts.method.as_str(),
         parts.uri.path(),
         &request_id,
     )
+    .instrument(span.clone())
     .await;
-    state.metrics.dec_inflight();
 
+    span.record("http.status_code", result.status().as_u16() as i64);
+    span.record("duration_ms", start.elapsed().as_millis() as i64);
+
+    // Inject traceparent into response so Envoy forwards it upstream.
+    if state.tracing_enabled {
+        inject_otel_context(&span, result.headers_mut());
+    }
+
+    state.metrics.dec_inflight();
     result
 }
 
@@ -90,6 +121,9 @@ async fn check_inner(
             return resp;
         }
     };
+
+    tracing::Span::current().record("route", route.name.as_str());
+    tracing::Span::current().record("upstream_service", route.upstream.service.as_str());
 
     // 3. Method check: verify the HTTP method is allowed for this route.
     if !route.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
@@ -196,6 +230,7 @@ async fn check_inner(
         let required_scopes = route.required_scopes.as_deref().unwrap_or(&[]);
         match crate::auth::validate_with_refresh(token, provider, cache, required_scopes).await {
             Ok(identity) => {
+                tracing::Span::current().record("auth_subject", identity.sub.as_str());
                 auth_subject = Some(identity.sub.clone());
                 if let Ok(v) = identity.sub.parse() {
                     response_headers.insert("x-auth-sub", v);

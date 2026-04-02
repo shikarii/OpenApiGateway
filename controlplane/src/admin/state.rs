@@ -22,6 +22,7 @@ pub(crate) struct AppState {
     pub rate_limiter: Arc<RateLimiter>,
     pub metrics: Arc<MetricsRegistry>,
     pub concurrency_limit: Arc<Semaphore>,
+    pub tracing_enabled: bool,
 }
 
 /// Mutable config state protected by a `RwLock`.
@@ -83,6 +84,7 @@ pub(crate) fn build_state(
         .map(|n| n as usize)
         .unwrap_or(Semaphore::MAX_PERMITS);
     let concurrency_limit = Arc::new(Semaphore::new(max_conc));
+    let tracing_enabled = config.observability.tracing.enabled;
 
     Arc::new(AppState {
         config_state: RwLock::new(ConfigState {
@@ -98,6 +100,7 @@ pub(crate) fn build_state(
         rate_limiter,
         metrics,
         concurrency_limit,
+        tracing_enabled,
     })
 }
 
