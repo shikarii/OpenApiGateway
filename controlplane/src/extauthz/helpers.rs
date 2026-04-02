@@ -217,3 +217,50 @@ pub(super) fn emit_log(
     };
     entry.emit();
 }
+
+// ---------------------------------------------------------------------------
+// OpenTelemetry trace-context propagation helpers
+// ---------------------------------------------------------------------------
+
+/// Adapter for extracting W3C traceparent from [`HeaderMap`].
+pub(super) struct HeaderExtractor<'a>(pub &'a HeaderMap);
+
+impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|k| k.as_str()).collect()
+    }
+}
+
+/// Adapter for injecting W3C traceparent into [`HeaderMap`].
+pub(super) struct HeaderInjector<'a>(pub &'a mut HeaderMap);
+
+impl opentelemetry::propagation::Injector for HeaderInjector<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        if let (Ok(name), Ok(val)) = (
+            key.parse::<axum::http::HeaderName>(),
+            value.parse::<axum::http::HeaderValue>(),
+        ) {
+            self.0.insert(name, val);
+        }
+    }
+}
+
+/// Extract an OpenTelemetry context from inbound request headers.
+pub(super) fn extract_otel_context(headers: &HeaderMap) -> opentelemetry::Context {
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(headers))
+    })
+}
+
+/// Inject the current span's trace context into response headers.
+pub(super) fn inject_otel_context(span: &tracing::Span, headers: &mut HeaderMap) {
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+    let cx = span.context();
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut HeaderInjector(headers));
+    });
+}

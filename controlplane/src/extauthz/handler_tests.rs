@@ -225,6 +225,7 @@ async fn check_overloaded_returns_503() {
         rate_limiter: Arc::clone(&state.rate_limiter),
         metrics: Arc::clone(&state.metrics),
         concurrency_limit: Arc::new(Semaphore::new(0)),
+        tracing_enabled: false,
     });
 
     let app = router(overloaded_state);
