@@ -49,9 +49,9 @@ fn virtual_hosts_from_routes() {
     let hcm = &envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
         ["typed_config"];
     let vhosts = hcm["route_config"]["virtual_hosts"].as_sequence().unwrap();
-    assert_eq!(vhosts.len(), cfg.routes.len());
 
-    // First route: public-echo
+    // Both routes share the same hostnames, so they merge into one virtual host.
+    assert_eq!(vhosts.len(), 1);
     let vh0 = &vhosts[0];
     assert_eq!(vh0["name"].as_str().unwrap(), "public-echo");
     let domains: Vec<&str> = vh0["domains"]
@@ -63,9 +63,13 @@ fn virtual_hosts_from_routes() {
     assert!(domains.contains(&"localhost"));
     assert!(domains.contains(&"127.0.0.1"));
 
-    let route = &vh0["routes"][0];
-    assert_eq!(route["match"]["prefix"].as_str().unwrap(), "/public");
-    assert_eq!(route["route"]["cluster"].as_str().unwrap(), "backend");
+    // Both route entries present in the merged virtual host.
+    let routes = vh0["routes"].as_sequence().unwrap();
+    assert_eq!(routes.len(), 2);
+    assert_eq!(routes[0]["match"]["prefix"].as_str().unwrap(), "/public");
+    assert_eq!(routes[0]["route"]["cluster"].as_str().unwrap(), "backend");
+    assert_eq!(routes[1]["match"]["prefix"].as_str().unwrap(), "/private");
+    assert_eq!(routes[1]["route"]["cluster"].as_str().unwrap(), "backend");
 }
 
 #[test]
@@ -80,7 +84,7 @@ fn clusters_from_services() {
     assert_eq!(cluster["lb_policy"].as_str().unwrap(), "ROUND_ROBIN");
 
     let ep = &cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0];
-    let sa = &ep["endpoint"]["socket_address"];
+    let sa = &ep["endpoint"]["address"]["socket_address"];
     assert_eq!(sa["address"].as_str().unwrap(), "echo-backend");
     assert_eq!(sa["port_value"].as_u64().unwrap(), 8081);
 }

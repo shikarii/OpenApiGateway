@@ -107,15 +107,46 @@ fn build_listener(cfg: &GatewayConfig) -> Result<Value, EnvoyGenError> {
     Ok(Value::Mapping(listener))
 }
 
-/// Build virtual hosts from gateway routes.
+/// Build virtual hosts from gateway routes, merging routes with identical domains.
+///
+/// Envoy requires each domain to appear in at most one virtual host.  Routes
+/// that share the same hostname set are grouped into a single virtual host
+/// with multiple route entries.
 fn build_virtual_hosts(routes: &[RouteConfig]) -> Vec<Value> {
-    routes.iter().map(build_virtual_host).collect()
+    // Group routes by their sorted domain set so identical hosts merge into one
+    // virtual host.  Envoy rejects duplicate domains across virtual hosts.
+    let mut groups: Vec<(Vec<String>, String, Vec<Value>)> = Vec::new();
+
+    for route in routes {
+        let mut key: Vec<String> = route.hostnames.clone();
+        key.sort();
+
+        if let Some(group) = groups.iter_mut().find(|(k, _, _)| *k == key) {
+            group.2.push(build_route_entry(route));
+        } else {
+            let domains = route.hostnames.clone();
+            groups.push((key, route.name.clone(), vec![build_route_entry(route)]));
+            let _ = domains; // domains are recovered from the first route's name below
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|(_, name, route_entries)| {
+            let matching = routes.iter().find(|r| r.name == name).expect("route");
+            let domains: Vec<Value> = matching.hostnames.iter().map(|h| val(h)).collect();
+
+            let mut vhost = serde_yaml::Mapping::new();
+            vhost.insert(val("name"), val(&name));
+            vhost.insert(val("domains"), Value::Sequence(domains));
+            vhost.insert(val("routes"), Value::Sequence(route_entries));
+            Value::Mapping(vhost)
+        })
+        .collect()
 }
 
-/// Build a single virtual host from a gateway route.
-fn build_virtual_host(route: &RouteConfig) -> Value {
-    let domains: Vec<Value> = route.hostnames.iter().map(|h| val(h)).collect();
-
+/// Build a single route entry (match + action) from a gateway route config.
+fn build_route_entry(route: &RouteConfig) -> Value {
     let mut match_rule = serde_yaml::Mapping::new();
     match_rule.insert(val("prefix"), val(&route.path_prefix));
 
@@ -136,19 +167,10 @@ fn build_virtual_host(route: &RouteConfig) -> Value {
         route_action.insert(val("retry_policy"), Value::Mapping(retry_policy));
     }
 
-    let mut route_entry = serde_yaml::Mapping::new();
-    route_entry.insert(val("match"), Value::Mapping(match_rule));
-    route_entry.insert(val("route"), Value::Mapping(route_action));
-
-    let mut vhost = serde_yaml::Mapping::new();
-    vhost.insert(val("name"), val(&route.name));
-    vhost.insert(val("domains"), Value::Sequence(domains));
-    vhost.insert(
-        val("routes"),
-        Value::Sequence(vec![Value::Mapping(route_entry)]),
-    );
-
-    Value::Mapping(vhost)
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(val("match"), Value::Mapping(match_rule));
+    entry.insert(val("route"), Value::Mapping(route_action));
+    Value::Mapping(entry)
 }
 
 /// Build clusters from gateway services.
@@ -161,8 +183,10 @@ fn build_cluster(service: &ServiceConfig) -> Result<Value, EnvoyGenError> {
     let mut lb_endpoints = Vec::new();
     for ep in &service.endpoints {
         let (host, port) = parse_endpoint(ep)?;
+        let mut ep_inner = serde_yaml::Mapping::new();
+        ep_inner.insert(val("address"), build_socket_address(&host, port));
         let mut lb_ep = serde_yaml::Mapping::new();
-        lb_ep.insert(val("endpoint"), build_socket_address(&host, port));
+        lb_ep.insert(val("endpoint"), Value::Mapping(ep_inner));
         lb_endpoints.push(Value::Mapping(lb_ep));
     }
 
@@ -202,6 +226,14 @@ fn build_health_check(service: &ServiceConfig) -> Value {
     let mut check = serde_yaml::Mapping::new();
     check.insert(val("timeout"), val(&duration_string(hc.timeout_ms)));
     check.insert(val("interval"), val(&duration_string(hc.interval_ms)));
+    check.insert(
+        val("unhealthy_threshold"),
+        Value::Number(serde_yaml::Number::from(3u64)),
+    );
+    check.insert(
+        val("healthy_threshold"),
+        Value::Number(serde_yaml::Number::from(1u64)),
+    );
     check.insert(val("http_health_check"), Value::Mapping(http_hc));
 
     Value::Mapping(check)
