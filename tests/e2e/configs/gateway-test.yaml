@@ -21,7 +21,7 @@ rate_limits:
   redis_address: "redis:6379"
   redis_db: 0
   redis_key_prefix: "rl"
-  default_timeout_ms: 50
+  default_timeout_ms: 100
   fail_open: false
   survivability_mode:
     enabled: true
