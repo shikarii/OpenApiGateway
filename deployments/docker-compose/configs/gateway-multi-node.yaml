@@ -1,0 +1,77 @@
+version: 1
+
+gateway:
+  listen_address: "0.0.0.0:8080"
+  admin_address: "0.0.0.0:9090"
+  request_timeout_ms: 15000
+  idle_timeout_ms: 60000
+  max_request_body_bytes: 10485760
+  trust_forwarded_headers: true
+
+auth:
+  providers:
+    - name: "dev"
+      issuer: "https://dev.example.local/"
+      audience: "api-gateway"
+      jwks_uri: "http://fake-jwks/.well-known/jwks.json"
+      cache_ttl_seconds: 300
+      clock_skew_seconds: 30
+
+rate_limits:
+  redis_address: "redis-primary:6379"
+  redis_db: 0
+  redis_key_prefix: "rl"
+  default_timeout_ms: 50
+  fail_open: false
+  survivability_mode:
+    enabled: true
+    fallback_capacity: 20
+    fallback_refill_rate_per_sec: 5
+
+routes:
+  - name: "public-echo"
+    hostnames: ["*"]
+    path_prefix: "/public"
+    methods: ["GET", "POST"]
+    auth_required: false
+    rate_limit:
+      bucket_capacity: 100
+      refill_rate_per_sec: 20
+      key_by: "ip"
+    upstream:
+      service: "backend"
+      request_timeout_ms: 5000
+      retries: 2
+
+  - name: "private-echo"
+    hostnames: ["*"]
+    path_prefix: "/private"
+    methods: ["GET", "POST"]
+    auth_required: true
+    auth_provider: "dev"
+    required_scopes: ["api.read"]
+    rate_limit:
+      bucket_capacity: 50
+      refill_rate_per_sec: 10
+      key_by: "sub"
+    upstream:
+      service: "backend"
+      request_timeout_ms: 5000
+      retries: 2
+
+services:
+  - name: "backend"
+    endpoints:
+      - "echo-backend:8081"
+    health_check:
+      path: "/healthz"
+      interval_ms: 2000
+      timeout_ms: 500
+
+observability:
+  access_log_json: true
+  prometheus_enabled: true
+  tracing:
+    enabled: false
+    otlp_endpoint: ""
+    sample_rate: 0.0

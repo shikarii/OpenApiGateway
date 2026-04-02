@@ -1,0 +1,217 @@
+services:
+  # ── Redis (primary + replica) ──────────────────────────────────────
+  redis-primary:
+    image: redis:7-alpine
+    container_name: redis-primary
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_primary_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - api-gateway
+
+  redis-replica:
+    image: redis:7-alpine
+    container_name: redis-replica
+    command: redis-server --replicaof redis-primary 6379 --appendonly yes
+    ports:
+      - "6380:6379"
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    volumes:
+      - redis_replica_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - api-gateway
+
+  # ── Backend (demo upstream) ────────────────────────────────────────
+  echo-backend:
+    image: ealen/echo-server:latest
+    container_name: echo-backend
+    environment:
+      PORT: 8081
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - api-gateway
+
+  # ── JWKS server (static key served by nginx) ──────────────────────
+  fake-jwks:
+    image: nginx:alpine
+    container_name: fake-jwks
+    volumes:
+      - ../../examples/single-node/jwks/jwks.json:/usr/share/nginx/html/.well-known/jwks.json:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/.well-known/jwks.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - api-gateway
+
+  # ── Gateway instances ──────────────────────────────────────────────
+  gateway-1:
+    build:
+      context: ../..
+      dockerfile: ./services/gateway-manager/Dockerfile
+    container_name: gateway-1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/gateway-multi-node.yaml:/app/gateway.yaml:ro
+      - envoy_config_1:/app/generated
+    environment:
+      GATEWAY_CONFIG: /app/gateway.yaml
+      ENVOY_CONFIG_PATH: /app/generated/envoy.yaml
+      LOG_LEVEL: info
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      echo-backend:
+        condition: service_healthy
+      fake-jwks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - api-gateway
+
+  gateway-2:
+    build:
+      context: ../..
+      dockerfile: ./services/gateway-manager/Dockerfile
+    container_name: gateway-2
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./configs/gateway-multi-node.yaml:/app/gateway.yaml:ro
+      - envoy_config_2:/app/generated
+    environment:
+      GATEWAY_CONFIG: /app/gateway.yaml
+      ENVOY_CONFIG_PATH: /app/generated/envoy.yaml
+      LOG_LEVEL: info
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      echo-backend:
+        condition: service_healthy
+      fake-jwks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - api-gateway
+
+  # ── Envoy instances (one per gateway) ──────────────────────────────
+  envoy-1:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: envoy-1
+    volumes:
+      - envoy_config_1:/etc/envoy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while [ ! -f /etc/envoy/envoy.yaml ]; do sleep 1; done
+        /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+    depends_on:
+      gateway-1:
+        condition: service_healthy
+    networks:
+      - api-gateway
+
+  envoy-2:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: envoy-2
+    volumes:
+      - envoy_config_2:/etc/envoy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while [ ! -f /etc/envoy/envoy.yaml ]; do sleep 1; done
+        /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+    depends_on:
+      gateway-2:
+        condition: service_healthy
+    networks:
+      - api-gateway
+
+  # ── Load balancer (front-door Envoy) ───────────────────────────────
+  envoy-lb:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: envoy-lb
+    ports:
+      - "80:8080"
+    volumes:
+      - ./configs/envoy-lb.yaml:/etc/envoy/envoy.yaml:ro
+    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+    depends_on:
+      - envoy-1
+      - envoy-2
+    networks:
+      - api-gateway
+
+  # ── Monitoring ─────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9092:9090"
+    volumes:
+      - ../prometheus/prometheus-multi.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - api-gateway
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - api-gateway
+
+volumes:
+  redis_primary_data:
+  redis_replica_data:
+  envoy_config_1:
+  envoy_config_2:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  api-gateway:
+    driver: bridge
