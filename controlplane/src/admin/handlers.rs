@@ -14,21 +14,30 @@ pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
-/// `GET /readyz` -- readiness probe. Returns 200 if config is loaded.
+/// `GET /readyz` -- readiness probe. Returns 200 if all dependencies healthy, 503 otherwise.
 pub(crate) async fn readyz(State(state): State<SharedState>) -> impl IntoResponse {
     let cs = state.config_state.read().await;
 
     // Config is always loaded after startup (we exit on failure).
+    let redis_ok = state.rate_limiter.ping().await;
     let jwks_ok = state.jwks_registry.all_healthy().await;
+    let ok = redis_ok && jwks_ok;
+
+    let status = if ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
     let response = ReadyResponse {
-        ok: true,
+        ok,
         config_loaded: true,
-        redis_ok: state.rate_limiter.ping().await,
+        redis_ok,
         jwks_ok,
         last_config_reload_unix: cs.last_reload_unix,
     };
 
-    (StatusCode::OK, Json(response))
+    (status, Json(response))
 }
 
 /// `GET /config/status` -- current config metadata.
@@ -214,7 +223,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readyz_returns_200() {
+    async fn readyz_returns_503_when_redis_offline() {
+        // test_router uses offline_for_test (no Redis), so redis_ok=false → 503.
         let app = test_router();
         let resp = app
             .oneshot(
@@ -226,13 +236,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["ok"], true);
+        assert_eq!(json["ok"], false);
         assert_eq!(json["config_loaded"], true);
+        assert_eq!(json["redis_ok"], false);
+        assert_eq!(json["jwks_ok"], true);
     }
 
     #[tokio::test]
