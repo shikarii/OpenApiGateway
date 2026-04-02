@@ -8,7 +8,8 @@ use shared::config_types::RouteConfig;
 use tokio::sync::Semaphore;
 use tower::ServiceExt;
 
-use super::handler::{extract_bearer, match_route, router};
+use super::handler::router;
+use super::helpers::{extract_bearer, match_route, BearerResult};
 use crate::admin::state::build_state;
 use crate::config;
 
@@ -86,27 +87,33 @@ fn match_route_exact_host_and_wildcard_both_match() {
 fn extract_bearer_valid() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer abc123"));
-    assert_eq!(extract_bearer(&headers), Some("abc123"));
+    match extract_bearer(&headers) {
+        Some(BearerResult::Valid(t)) => assert_eq!(t, "abc123"),
+        other => panic!("expected Valid, got {other:?}"),
+    }
 }
 
 #[test]
 fn extract_bearer_missing() {
     let headers = axum::http::HeaderMap::new();
-    assert_eq!(extract_bearer(&headers), None);
+    assert!(extract_bearer(&headers).is_none());
 }
 
 #[test]
 fn extract_bearer_wrong_scheme() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Basic dXNlcjpw"));
-    assert_eq!(extract_bearer(&headers), None);
+    assert!(extract_bearer(&headers).is_none());
 }
 
 #[test]
 fn extract_bearer_empty_token() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer "));
-    assert_eq!(extract_bearer(&headers), None);
+    assert!(matches!(
+        extract_bearer(&headers),
+        Some(BearerResult::Malformed)
+    ));
 }
 
 // --- Integration tests ---
@@ -144,6 +151,7 @@ async fn check_unmatched_route_returns_200() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get("x-request-id").is_some());
 }
 
 #[tokio::test]
@@ -168,6 +176,27 @@ async fn check_matched_route_allows_or_rate_limits() {
             || status == StatusCode::TOO_MANY_REQUESTS,
         "unexpected status: {status}"
     );
+    assert!(resp.headers().get("x-request-id").is_some());
+}
+
+#[tokio::test]
+async fn check_method_not_allowed_returns_405() {
+    let app = test_router();
+    // gateway-single-node.yaml routes allow GET only; send DELETE.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/public/something")
+                .header("host", "example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(resp.headers().get("x-request-id").is_some());
 }
 
 #[tokio::test]
@@ -213,4 +242,5 @@ async fn check_overloaded_returns_503() {
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(resp.headers().get("x-gateway-overloaded").unwrap(), "true");
     assert_eq!(resp.headers().get("retry-after").unwrap(), "1");
+    assert!(resp.headers().get("x-request-id").is_some());
 }

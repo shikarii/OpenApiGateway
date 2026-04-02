@@ -51,6 +51,7 @@ impl AccessLogEntry {
     }
 
     /// Serialize this entry as a JSON string without writing.
+    #[cfg(test)]
     pub(crate) fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }

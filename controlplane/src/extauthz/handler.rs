@@ -3,9 +3,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Router;
 
-use shared::config_types::RouteConfig;
-
 use crate::admin::state::SharedState;
+use crate::observability::generate_request_id;
+
+use super::helpers::*;
 
 /// Build the ext_authz axum router.
 ///
@@ -19,52 +20,133 @@ pub(crate) fn router(state: SharedState) -> Router {
 ///
 /// Evaluates auth, rate-limit, and overload for each inbound request.
 /// Returns 200 to allow, or 401/403/429/503 to deny.
-async fn check(State(state): State<SharedState>, req: Request) -> impl IntoResponse {
+async fn check(State(state): State<SharedState>, req: Request) -> axum::response::Response {
+    let request_id = generate_request_id();
+
     // 1. Overload protection: reject if at max concurrency.
     let _permit = match state.concurrency_limit.try_acquire() {
         Ok(p) => p,
         Err(_) => {
             state.metrics.record_overload();
-            return overload_response();
+            return overload_response(&request_id);
         }
     };
 
     state.metrics.inc_inflight();
     let (parts, _body) = req.into_parts();
-    let result = check_inner(&state, &parts.headers, parts.uri.path()).await;
+    let result = check_inner(
+        &state,
+        &parts.headers,
+        parts.method.as_str(),
+        parts.uri.path(),
+        &request_id,
+    )
+    .await;
     state.metrics.dec_inflight();
 
     result
 }
 
 /// Inner check logic, separated so inflight gauge is always decremented.
+///
+/// All metrics recording and access log emission happen here since this
+/// function already holds the config read lock.
 async fn check_inner(
     state: &SharedState,
     headers: &HeaderMap,
+    method: &str,
     path: &str,
+    request_id: &str,
 ) -> axum::response::Response {
+    let start = std::time::Instant::now();
     let host = header_str(headers, "host").unwrap_or("*");
+    let remote_addr = client_ip(headers, false);
 
     let cs = state.config_state.read().await;
     let cfg = &cs.config;
+    let trust_forwarded = cfg.gateway.trust_forwarded_headers;
 
     // 2. Route matching.
     let route = match match_route(&cfg.routes, host, path) {
         Some(r) => r,
-        None => return allow_response(HeaderMap::new()),
+        None => {
+            let resp = allow_response(HeaderMap::new(), request_id);
+            emit_log(
+                request_id,
+                &remote_addr,
+                host,
+                method,
+                path,
+                "",
+                200,
+                &start,
+                None,
+                "none",
+                "",
+            );
+            state
+                .metrics
+                .record_request("", method, 200, start.elapsed().as_millis() as f64);
+            return resp;
+        }
     };
 
-    let mut response_headers = HeaderMap::new();
+    // 3. Method check: verify the HTTP method is allowed for this route.
+    if !route.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
+        tracing::debug!(route = %route.name, method, "method not allowed");
+        return method_denied(
+            state,
+            request_id,
+            &remote_addr,
+            host,
+            method,
+            path,
+            route,
+            &start,
+        );
+    }
 
-    // 3. Authentication (if required).
+    let mut response_headers = HeaderMap::new();
+    let mut auth_subject: Option<String> = None;
+
+    // 4. Authentication (if required).
     if route.auth_required {
+        tracing::info!(route = %route.name, "auth_check");
         let token = match extract_bearer(headers) {
-            Some(t) => t,
+            Some(BearerResult::Valid(t)) => t,
+            Some(BearerResult::Malformed) => {
+                state
+                    .metrics
+                    .record_auth_failure(&route.name, "invalid_token_format");
+                return early_deny(
+                    state,
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    route,
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_token_format",
+                    &start,
+                );
+            }
             None => {
                 state
                     .metrics
                     .record_auth_failure(&route.name, "missing_token");
-                return deny_response(StatusCode::UNAUTHORIZED, "missing_token");
+                return early_deny(
+                    state,
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    route,
+                    StatusCode::UNAUTHORIZED,
+                    "missing_token",
+                    &start,
+                );
             }
         };
 
@@ -75,7 +157,18 @@ async fn check_inner(
                 state
                     .metrics
                     .record_auth_failure(&route.name, "unknown_provider");
-                return deny_response(StatusCode::SERVICE_UNAVAILABLE, "auth_provider_unavailable");
+                return early_deny(
+                    state,
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    route,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_provider_unavailable",
+                    &start,
+                );
             }
         };
 
@@ -85,20 +178,32 @@ async fn check_inner(
                 state
                     .metrics
                     .record_auth_failure(&route.name, "unknown_provider");
-                return deny_response(StatusCode::SERVICE_UNAVAILABLE, "auth_provider_unavailable");
+                return early_deny(
+                    state,
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    route,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_provider_unavailable",
+                    &start,
+                );
             }
         };
 
         let required_scopes = route.required_scopes.as_deref().unwrap_or(&[]);
         match crate::auth::validate_with_refresh(token, provider, cache, required_scopes).await {
             Ok(identity) => {
+                auth_subject = Some(identity.sub.clone());
                 if let Ok(v) = identity.sub.parse() {
                     response_headers.insert("x-auth-sub", v);
                 }
                 if let Ok(v) = identity.iss.parse() {
                     response_headers.insert("x-auth-iss", v);
                 }
-                let scopes = identity.scopes.join(" ");
+                let scopes = identity.scopes.join(",");
                 if let Ok(v) = scopes.parse() {
                     response_headers.insert("x-auth-scopes", v);
                 }
@@ -107,12 +212,24 @@ async fn check_inner(
                 state
                     .metrics
                     .record_auth_failure(&route.name, e.error_code());
-                return deny_response(e.http_status(), e.error_code());
+                return early_deny(
+                    state,
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    route,
+                    e.http_status(),
+                    e.error_code(),
+                    &start,
+                );
             }
         }
     }
 
-    // 4. Rate limiting.
+    // 5. Rate limiting.
+    tracing::info!(route = %route.name, "rate_limit_check");
     let key_value = if route.rate_limit.key_by == "sub" {
         response_headers
             .get("x-auth-sub")
@@ -120,7 +237,7 @@ async fn check_inner(
             .unwrap_or("anonymous")
             .to_owned()
     } else {
-        client_ip(headers, cs.config.gateway.trust_forwarded_headers)
+        client_ip(headers, trust_forwarded)
     };
 
     let bucket_key = crate::ratelimit::build_key(
@@ -130,6 +247,7 @@ async fn check_inner(
         &key_value,
     );
 
+    let rl_mode;
     match state
         .rate_limiter
         .check(
@@ -140,17 +258,8 @@ async fn check_inner(
         .await
     {
         Ok(decision) => {
-            let remaining = decision.remaining.to_string();
-            let limit = decision.limit.to_string();
-            if let Ok(v) = remaining.parse() {
-                response_headers.insert("x-ratelimit-remaining", v);
-            }
-            if let Ok(v) = limit.parse() {
-                response_headers.insert("x-ratelimit-limit", v);
-            }
-            if let Ok(v) = decision.mode.as_header_value().parse() {
-                response_headers.insert("x-ratelimit-mode", v);
-            }
+            rl_mode = decision.mode.as_header_value().to_owned();
+            insert_rate_limit_headers(&mut response_headers, &decision);
 
             if !decision.allowed {
                 state.metrics.record_rate_limit_denied(&route.name);
@@ -158,7 +267,27 @@ async fn check_inner(
                 if let Ok(v) = retry_after.parse() {
                     response_headers.insert("retry-after", v);
                 }
-                return (StatusCode::TOO_MANY_REQUESTS, response_headers).into_response();
+                let status = StatusCode::TOO_MANY_REQUESTS;
+                emit_log(
+                    request_id,
+                    &remote_addr,
+                    host,
+                    method,
+                    path,
+                    &route.name,
+                    status.as_u16(),
+                    &start,
+                    auth_subject.as_deref(),
+                    &rl_mode,
+                    &route.upstream.service,
+                );
+                state.metrics.record_request(
+                    &route.name,
+                    method,
+                    status.as_u16(),
+                    start.elapsed().as_millis() as f64,
+                );
+                return (status, response_headers).into_response();
             }
 
             match decision.mode {
@@ -172,74 +301,36 @@ async fn check_inner(
         }
         Err(_) => {
             state.metrics.record_rate_limit_denied(&route.name);
-            return deny_response(StatusCode::SERVICE_UNAVAILABLE, "rate_limiter_unavailable");
+            return early_deny(
+                state,
+                request_id,
+                &remote_addr,
+                host,
+                method,
+                path,
+                route,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rate_limiter_unavailable",
+                &start,
+            );
         }
     }
 
-    allow_response(response_headers)
-}
-
-/// Match an incoming request to a route by hostname and longest path prefix.
-pub(super) fn match_route<'a>(
-    routes: &'a [RouteConfig],
-    host: &str,
-    path: &str,
-) -> Option<&'a RouteConfig> {
-    routes
-        .iter()
-        .filter(|r| r.hostnames.iter().any(|h| h == "*" || h == host))
-        .filter(|r| path.starts_with(&r.path_prefix))
-        .max_by_key(|r| r.path_prefix.len())
-}
-
-/// Extract the Bearer token from the Authorization header.
-pub(super) fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get("authorization")?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ")?;
-    if token.is_empty() {
-        return None;
-    }
-    Some(token)
-}
-
-/// Extract the client IP, optionally trusting X-Forwarded-For.
-fn client_ip(headers: &HeaderMap, trust_forwarded: bool) -> String {
-    if trust_forwarded {
-        if let Some(xff) = header_str(headers, "x-forwarded-for") {
-            if let Some(first) = xff.split(',').next() {
-                let ip = first.trim();
-                if !ip.is_empty() {
-                    return ip.to_owned();
-                }
-            }
-        }
-    }
-    header_str(headers, "x-envoy-external-address")
-        .unwrap_or("0.0.0.0")
-        .to_owned()
-}
-
-fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name)?.to_str().ok()
-}
-
-fn overload_response() -> axum::response::Response {
-    let mut headers = HeaderMap::new();
-    if let Ok(v) = "true".parse() {
-        headers.insert("x-gateway-overloaded", v);
-    }
-    if let Ok(v) = "1".parse() {
-        headers.insert("retry-after", v);
-    }
-    let body = serde_json::json!({"error": "gateway_overloaded"});
-    (StatusCode::SERVICE_UNAVAILABLE, headers, axum::Json(body)).into_response()
-}
-
-fn allow_response(headers: HeaderMap) -> axum::response::Response {
-    (StatusCode::OK, headers).into_response()
-}
-
-fn deny_response(status: StatusCode, error_code: &str) -> axum::response::Response {
-    let body = serde_json::json!({"error": error_code});
-    (status, axum::Json(body)).into_response()
+    emit_log(
+        request_id,
+        &remote_addr,
+        host,
+        method,
+        path,
+        &route.name,
+        200,
+        &start,
+        auth_subject.as_deref(),
+        &rl_mode,
+        &route.upstream.service,
+    );
+    state
+        .metrics
+        .record_request(&route.name, method, 200, start.elapsed().as_millis() as f64);
+    allow_response(response_headers, request_id)
 }
