@@ -60,8 +60,7 @@ fn virtual_hosts_from_routes() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert!(domains.contains(&"localhost"));
-    assert!(domains.contains(&"127.0.0.1"));
+    assert!(domains.contains(&"*"));
 
     // Both route entries present in the merged virtual host.
     let routes = vh0["routes"].as_sequence().unwrap();

@@ -13,7 +13,7 @@ auth:
     - name: "dev"
       issuer: "https://dev.example.local/"
       audience: "api-gateway"
-      jwks_uri: "http://host.docker.internal:7001/.well-known/jwks.json"
+      jwks_uri: "http://fake-jwks/.well-known/jwks.json"
       cache_ttl_seconds: 300
       clock_skew_seconds: 30
 
@@ -30,7 +30,7 @@ rate_limits:
 
 routes:
   - name: "public-echo"
-    hostnames: ["localhost", "127.0.0.1"]
+    hostnames: ["*"]
     path_prefix: "/public"
     methods: ["GET", "POST"]
     auth_required: false
@@ -44,7 +44,7 @@ routes:
       retries: 1
 
   - name: "private-echo"
-    hostnames: ["localhost", "127.0.0.1"]
+    hostnames: ["*"]
     path_prefix: "/private"
     methods: ["GET", "POST"]
     auth_required: true

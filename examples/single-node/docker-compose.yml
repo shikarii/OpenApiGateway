@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   redis:
     image: redis:7-alpine
@@ -32,14 +30,17 @@ services:
       - gateway
 
   fake-jwks:
-    image: ghcr.io/navidstuart/fake-jwks-server:latest
+    image: nginx:alpine
     container_name: gateway-jwks
     ports:
-      - "7001:3000"
-    environment:
-      PRIVATE_KEY_PATH: /jwks/private.pem
+      - "7001:80"
     volumes:
-      - ./jwks:/jwks
+      - ./jwks/jwks.json:/usr/share/nginx/html/.well-known/jwks.json:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/.well-known/jwks.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - gateway
 
@@ -49,19 +50,26 @@ services:
       dockerfile: ./services/gateway-manager/Dockerfile
     container_name: gateway-manager
     ports:
-      - "8080:8080"
       - "9090:9090"
     volumes:
-      - ../../configs:/app/configs
+      - ../configs/gateway-single-node.yaml:/app/gateway.yaml:ro
+      - envoy_config:/app/generated
     environment:
-      GATEWAY_CONFIG_PATH: /app/configs/gateway.yaml
-      ENVOY_CONFIG_PATH: /app/configs/envoy.yaml
+      GATEWAY_CONFIG: /app/gateway.yaml
+      ENVOY_CONFIG_PATH: /app/generated/envoy.yaml
       LOG_LEVEL: info
     depends_on:
       redis:
         condition: service_healthy
       echo-backend:
         condition: service_healthy
+      fake-jwks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - gateway
 
@@ -69,12 +77,19 @@ services:
     image: envoyproxy/envoy:v1.31-latest
     container_name: gateway-envoy
     ports:
-      - "80:10000"
+      - "80:8080"
     volumes:
-      - ../../configs/envoy.yaml:/etc/envoy/envoy.yaml
-    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+      - envoy_config:/etc/envoy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Envoy config..."
+        while [ ! -f /etc/envoy/envoy.yaml ]; do sleep 1; done
+        echo "Config found, starting Envoy"
+        /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
     depends_on:
-      - gateway-manager
+      gateway-manager:
+        condition: service_healthy
     networks:
       - gateway
 
@@ -84,7 +99,7 @@ services:
     ports:
       - "9091:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -95,6 +110,7 @@ services:
 volumes:
   redis_data:
   prometheus_data:
+  envoy_config:
 
 networks:
   gateway:

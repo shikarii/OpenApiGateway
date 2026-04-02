@@ -124,9 +124,7 @@ fn build_virtual_hosts(routes: &[RouteConfig]) -> Vec<Value> {
         if let Some(group) = groups.iter_mut().find(|(k, _, _)| *k == key) {
             group.2.push(build_route_entry(route));
         } else {
-            let domains = route.hostnames.clone();
             groups.push((key, route.name.clone(), vec![build_route_entry(route)]));
-            let _ = domains; // domains are recovered from the first route's name below
         }
     }
 
