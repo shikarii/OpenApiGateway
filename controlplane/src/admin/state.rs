@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use shared::config_types::GatewayConfig;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::auth::JwksCacheRegistry;
 use crate::observability::MetricsRegistry;
@@ -17,12 +17,15 @@ pub(crate) type SharedState = Arc<AppState>;
 pub(crate) struct AppState {
     pub config_state: RwLock<ConfigState>,
     pub config_path: PathBuf,
+    pub envoy_config_path: Option<PathBuf>,
     pub jwks_registry: Arc<JwksCacheRegistry>,
     pub rate_limiter: Arc<RateLimiter>,
     pub metrics: Arc<MetricsRegistry>,
+    pub concurrency_limit: Arc<Semaphore>,
 }
 
 /// Mutable config state protected by a `RwLock`.
+#[derive(Clone)]
 pub(crate) struct ConfigState {
     pub config: GatewayConfig,
     pub sha256: String,
@@ -67,12 +70,19 @@ pub(crate) fn build_state(
     config: GatewayConfig,
     raw_yaml: &[u8],
     config_path: PathBuf,
+    envoy_config_path: Option<PathBuf>,
     jwks_registry: Arc<JwksCacheRegistry>,
     rate_limiter: Arc<RateLimiter>,
     metrics: Arc<MetricsRegistry>,
 ) -> SharedState {
     let sha256 = sha256_hex(raw_yaml);
     let now = now_unix();
+    let max_conc = config
+        .gateway
+        .max_concurrent_requests
+        .map(|n| n as usize)
+        .unwrap_or(Semaphore::MAX_PERMITS);
+    let concurrency_limit = Arc::new(Semaphore::new(max_conc));
 
     Arc::new(AppState {
         config_state: RwLock::new(ConfigState {
@@ -83,9 +93,11 @@ pub(crate) fn build_state(
             last_reload_error: None,
         }),
         config_path,
+        envoy_config_path,
         jwks_registry,
         rate_limiter,
         metrics,
+        concurrency_limit,
     })
 }
 

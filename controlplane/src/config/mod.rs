@@ -2,6 +2,8 @@ mod loader;
 mod validation;
 
 #[allow(dead_code)]
+mod envoy_ext_authz;
+#[allow(dead_code)]
 mod envoy_gen;
 
 #[allow(dead_code)]

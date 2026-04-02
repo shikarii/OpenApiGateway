@@ -1,5 +1,6 @@
 use prometheus::{
-    CounterVec, Encoder, HistogramOpts, HistogramVec, IntGauge, Opts, Registry, TextEncoder,
+    CounterVec, Encoder, HistogramOpts, HistogramVec, IntCounter, IntGauge, Opts, Registry,
+    TextEncoder,
 };
 
 /// Errors from the metrics subsystem.
@@ -37,6 +38,7 @@ pub(crate) struct MetricsRegistry {
     upstream_failures_total: CounterVec,
     config_reload_total: CounterVec,
     inflight_requests: IntGauge,
+    overload_total: IntCounter,
 }
 
 /// Histogram buckets for request duration (milliseconds).
@@ -116,6 +118,11 @@ impl MetricsRegistry {
             "Current in-flight HTTP requests",
         )?;
 
+        let overload_total = IntCounter::new(
+            "gateway_overload_total",
+            "Requests rejected due to gateway overload",
+        )?;
+
         registry.register(Box::new(http_requests_total.clone()))?;
         registry.register(Box::new(http_request_duration_ms.clone()))?;
         registry.register(Box::new(auth_failures_total.clone()))?;
@@ -125,6 +132,7 @@ impl MetricsRegistry {
         registry.register(Box::new(upstream_failures_total.clone()))?;
         registry.register(Box::new(config_reload_total.clone()))?;
         registry.register(Box::new(inflight_requests.clone()))?;
+        registry.register(Box::new(overload_total.clone()))?;
 
         Ok(Self {
             registry,
@@ -137,6 +145,7 @@ impl MetricsRegistry {
             upstream_failures_total,
             config_reload_total,
             inflight_requests,
+            overload_total,
         })
     }
 
@@ -199,6 +208,11 @@ impl MetricsRegistry {
     /// Decrement in-flight request gauge.
     pub(crate) fn dec_inflight(&self) {
         self.inflight_requests.dec();
+    }
+
+    /// Record a gateway overload rejection.
+    pub(crate) fn record_overload(&self) {
+        self.overload_total.inc();
     }
 
     /// Encode all metrics as Prometheus text exposition format.

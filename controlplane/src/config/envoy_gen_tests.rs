@@ -193,3 +193,61 @@ fn admin_address_is_localhost() {
     assert_eq!(admin_addr["address"].as_str().unwrap(), "127.0.0.1");
     assert_eq!(admin_addr["port_value"].as_u64().unwrap(), 9901);
 }
+
+#[test]
+fn ext_authz_filter_present_when_configured() {
+    let mut cfg = sample_config();
+    cfg.gateway.extauthz_address = Some("127.0.0.1:10003".into());
+    let envoy = generate_and_parse(&cfg);
+
+    let hcm = &envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
+        ["typed_config"];
+    let filters = hcm["http_filters"].as_sequence().unwrap();
+    assert_eq!(filters.len(), 2, "ext_authz + router");
+    assert_eq!(
+        filters[0]["name"].as_str().unwrap(),
+        "envoy.filters.http.ext_authz"
+    );
+    assert_eq!(
+        filters[1]["name"].as_str().unwrap(),
+        "envoy.filters.http.router"
+    );
+
+    // Verify ext_authz cluster exists.
+    let clusters = envoy["static_resources"]["clusters"].as_sequence().unwrap();
+    let authz_cluster = clusters
+        .iter()
+        .find(|c| c["name"].as_str().unwrap() == "gateway_manager_extauthz")
+        .expect("ext_authz cluster");
+    assert_eq!(authz_cluster["type"].as_str().unwrap(), "STATIC");
+
+    let ep = &authz_cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0];
+    let sa = &ep["endpoint"]["address"]["socket_address"];
+    assert_eq!(sa["address"].as_str().unwrap(), "127.0.0.1");
+    assert_eq!(sa["port_value"].as_u64().unwrap(), 10003);
+}
+
+#[test]
+fn no_ext_authz_filter_when_not_configured() {
+    let cfg = sample_config();
+    assert!(cfg.gateway.extauthz_address.is_none());
+    let envoy = generate_and_parse(&cfg);
+
+    let hcm = &envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
+        ["typed_config"];
+    let filters = hcm["http_filters"].as_sequence().unwrap();
+    assert_eq!(filters.len(), 1, "only router when no ext_authz");
+    assert_eq!(
+        filters[0]["name"].as_str().unwrap(),
+        "envoy.filters.http.router"
+    );
+
+    // No ext_authz cluster.
+    let clusters = envoy["static_resources"]["clusters"].as_sequence().unwrap();
+    assert!(
+        !clusters
+            .iter()
+            .any(|c| c["name"].as_str().unwrap() == "gateway_manager_extauthz"),
+        "no ext_authz cluster when not configured"
+    );
+}

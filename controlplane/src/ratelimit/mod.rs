@@ -10,5 +10,8 @@ pub(crate) mod limiter;
 mod lua;
 
 #[allow(dead_code, unused_imports)]
+pub(crate) use bucket::build_key;
+#[allow(dead_code, unused_imports)]
 pub(crate) use error::RateLimitError;
-pub(crate) use limiter::RateLimiter;
+#[allow(dead_code, unused_imports)]
+pub(crate) use limiter::{RateDecision, RateLimitMode, RateLimiter};

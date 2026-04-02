@@ -23,6 +23,14 @@ pub struct GatewayServer {
     pub idle_timeout_ms: u64,
     pub max_request_body_bytes: u64,
     pub trust_forwarded_headers: bool,
+    /// Address for the ext_authz HTTP service (e.g. `"0.0.0.0:10003"`).
+    /// When set, the generated Envoy config includes an ext_authz filter.
+    #[serde(default)]
+    pub extauthz_address: Option<String>,
+    /// Maximum concurrent requests before the gateway returns 503.
+    /// `None` means no limit.
+    #[serde(default)]
+    pub max_concurrent_requests: Option<u64>,
 }
 
 /// Top-level auth configuration.
