@@ -1,0 +1,95 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: e2e-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    networks:
+      - e2e
+
+  echo-backend:
+    image: ealen/echo-server:latest
+    container_name: e2e-backend
+    environment:
+      PORT: 8081
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    networks:
+      - e2e
+
+  fake-jwks:
+    image: nginx:alpine
+    container_name: e2e-jwks
+    volumes:
+      - ./jwks/jwks.json:/usr/share/nginx/html/.well-known/jwks.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/.well-known/jwks.json || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    networks:
+      - e2e
+
+  gateway-manager:
+    build:
+      context: ../..
+      dockerfile: ./services/gateway-manager/Dockerfile
+    container_name: e2e-gateway-manager
+    ports:
+      - "19090:9090"
+    volumes:
+      - envoy-config:/app/envoy-output
+      - ./configs/gateway-test.yaml:/app/gateway.yaml:ro
+    environment:
+      GATEWAY_CONFIG: /app/gateway.yaml
+      ENVOY_CONFIG_PATH: /app/envoy-output/envoy.yaml
+      RUST_LOG: controlplane=debug
+    depends_on:
+      redis:
+        condition: service_healthy
+      echo-backend:
+        condition: service_healthy
+      fake-jwks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/healthz || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 30s
+    networks:
+      - e2e
+
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: e2e-envoy
+    ports:
+      - "10080:8080"
+    volumes:
+      - envoy-config:/etc/envoy:ro
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Waiting for envoy.yaml..."
+        while [ ! -f /etc/envoy/envoy.yaml ]; do sleep 0.5; done
+        echo "envoy.yaml found, starting Envoy"
+        /usr/local/bin/envoy -c /etc/envoy/envoy.yaml
+    depends_on:
+      gateway-manager:
+        condition: service_healthy
+    networks:
+      - e2e
+
+volumes:
+  envoy-config:
+
+networks:
+  e2e:
+    driver: bridge
