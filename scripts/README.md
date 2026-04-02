@@ -1,12 +1,14 @@
 # Scripts Directory
 
-This directory contains low-ceremony helper scripts for development and testing.
+Helper scripts for development and testing.
 
 ## Available Scripts
 
 ### `gen-jwt-dev.py`
 
 Generate JWT tokens for local development and testing.
+
+**Requirements:** `pip install PyJWT cryptography`
 
 **Usage:**
 
@@ -22,6 +24,9 @@ python3 scripts/gen-jwt-dev.py --sub user-1 --decode
 
 # Set expiration to 1 hour
 python3 scripts/gen-jwt-dev.py --sub user-1 --hours 1
+
+# Use a specific private key file
+python3 scripts/gen-jwt-dev.py --key-file /path/to/private.pem --sub user-1
 ```
 
 **Options:**
@@ -31,49 +36,38 @@ python3 scripts/gen-jwt-dev.py --sub user-1 --hours 1
 - `--issuer` — JWT issuer URL. Default: `https://dev.example.local/`
 - `--audience` — JWT audience. Default: `api-gateway`
 - `--hours` — Token expiration. Default: 24 hours
+- `--key-file` — RSA private key PEM file. Default: `examples/single-node/jwks/private.pem`
 - `--decode` — Print decoded token (for inspection)
 
 **Output:** Raw JWT token (suitable for piping to curl or environment variables)
 
 ### `smoke-test.sh`
 
-Basic smoke tests for gateway functionality.
+Smoke tests for the single-node example deployment.
 
 **Usage:**
 
 ```bash
-# Run against localhost (default)
-./scripts/smoke-test.sh
+# Run against localhost (default: Envoy on port 80, admin on port 9090)
+bash scripts/smoke-test.sh
 
-# Run against remote gateway
-GATEWAY_URL=https://api.example.com ./scripts/smoke-test.sh
+# Override URLs
+ENVOY_URL=http://localhost:8080 ADMIN_URL=http://localhost:9090 bash scripts/smoke-test.sh
 ```
 
 **Tests:**
-- Public route without auth
-- Protected route without auth (should fail)
-- Protected route with valid JWT
-- Admin /healthz endpoint
-- Admin /readyz endpoint
-- Admin /metrics endpoint
+- Public route through Envoy (200)
+- Unknown route (404)
+- Auth tests (skipped -- needs ext_authz filter in Envoy)
+- Admin /healthz, /readyz, /metrics, /config/status
+- JWT generation (if python3 + PyJWT available)
 
 **Requirements:**
 - `curl` — HTTP client
-- `python3` — For JWT generation
-- Gateway running and accessible
-
-## Contributing
-
-When adding new scripts:
-
-1. Keep them practical and low-ceremony
-2. Add a header comment explaining purpose
-3. Include usage examples
-4. Add this README entry
-5. No important logic should live only in scripts — they're helpers, not core
+- `python3` + `PyJWT` + `cryptography` — For JWT generation (optional)
+- Single-node stack running via Docker Compose
 
 ## Further Reading
 
-- [../deployments/docker-compose/](../deployments/docker-compose/) — Deployment automation
 - [../examples/](../examples/) — Example configurations
 - [../specs/](../specs/) — Specification details

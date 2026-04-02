@@ -1,60 +1,83 @@
 # Single-Node Deployment Example
 
-This example shows a minimal single-machine deployment of the API Gateway v1 for local development or small teams.
+Complete, runnable single-machine deployment of the API Gateway for local development.
 
 ## Architecture
 
 ```
 [Client]
     |
-    v
-[Gateway (Port 8080)]
+    v  (port 80)
+[Envoy Data Plane]
     |
-    +---> [Redis] (Port 6379)
-    +---> [Backend] (Port 8081)
-    +---> [JWKS Server] (Port 7001)
+    +---> [Echo Backend] (port 8081)
+    |
+[Gateway Manager]
+    |
+    +---> [Redis] (port 6379)
+    +---> [JWKS Server] (port 7001)
+    +---> [Prometheus] (port 9091)
 ```
+
+Envoy handles HTTP traffic on port 80. The gateway manager generates Envoy config and
+exposes admin endpoints on port 9090.
+
+## Services
+
+| Service | Image | Host Port | Purpose |
+|---------|-------|-----------|---------|
+| envoy | envoyproxy/envoy:v1.31 | 80 | HTTP data plane |
+| gateway-manager | (built from source) | 9090 | Config + admin API |
+| redis | redis:7-alpine | 6379 | Rate limiting store |
+| echo-backend | ealen/echo-server | 8081 | Demo upstream |
+| fake-jwks | nginx:alpine | 7001 | Static JWKS endpoint |
+| prometheus | prom/prometheus | 9091 | Metrics dashboard |
 
 ## Setup
 
-### Step 1: Copy Example Config
+### Step 1: Start Services
 
 ```bash
-cp examples/single-node/gateway-single-node.yaml configs/gateway.yaml
+docker compose -f examples/single-node/docker-compose.yml up -d --build
 ```
 
-### Step 2: Start Services
+### Step 2: Test the Gateway
+
+**Public route (through Envoy):**
 
 ```bash
-docker-compose -f examples/single-node/docker-compose.yml up -d
+curl http://localhost/public/echo -d '{"msg":"hello"}'
 ```
 
-This starts:
-- `redis:7` — Rate limiting store
-- `gateway-manager` — Management and config loader
-- `envoy` — Data plane proxy
-- `echo-backend` — Demo upstream service
-- `fake-jwks` — Development JWKS server
+**Admin health check:**
+
+```bash
+curl http://localhost:9090/healthz
+curl http://localhost:9090/readyz
+curl http://localhost:9090/metrics
+```
 
 ### Step 3: Generate a Dev JWT
 
 ```bash
-python3 scripts/gen-jwt-dev.py --sub user-1 --scopes api.read > /tmp/token.jwt
+pip install PyJWT cryptography
+python3 scripts/gen-jwt-dev.py --sub user-1 --scopes "api.read"
 ```
 
-### Step 4: Test the Gateway
+> **Note:** Auth enforcement through Envoy is not yet active (requires ext_authz
+> filter wiring). The JWT generator is provided for future use and testing the
+> gateway manager's token validation directly.
 
-**Unprotected route:**
+### Step 4: Run Smoke Tests
 
 ```bash
-curl http://localhost:8080/public/echo -d '{"msg":"hello"}'
+bash scripts/smoke-test.sh
 ```
 
-**Protected route (with JWT):**
+## Tear Down
 
 ```bash
-TOKEN=$(cat /tmp/token.jwt)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/private/echo -d '{"msg":"hello"}'
+docker compose -f examples/single-node/docker-compose.yml down -v
 ```
 
 ## Scale Considerations
@@ -63,10 +86,3 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/private/echo -d '{"
 - **Single Redis instance** (no clustering)
 - **Static upstream endpoints** in config
 - **Suitable for:** 1-2 services, < 100 req/sec, local development
-
-## Next Steps
-
-- Add more routes to `gateway.yaml`
-- Configure health checks via `/readyz`
-- Monitor metrics at `http://localhost:9090/metrics`
-- See [../../deployments/docker-compose/](../../deployments/docker-compose/) for production multi-node setups
