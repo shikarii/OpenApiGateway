@@ -35,6 +35,7 @@ pub(crate) struct MetricsRegistry {
     rate_limit_allowed_total: CounterVec,
     rate_limit_denied_total: CounterVec,
     rate_limit_degraded_total: CounterVec,
+    #[allow(dead_code)]
     upstream_failures_total: CounterVec,
     config_reload_total: CounterVec,
     inflight_requests: IntGauge,
@@ -189,6 +190,7 @@ impl MetricsRegistry {
     }
 
     /// Record an upstream service failure.
+    #[allow(dead_code)]
     pub(crate) fn record_upstream_failure(&self, route: &str, service: &str, reason: &str) {
         self.upstream_failures_total
             .with_label_values(&[route, service, reason])
