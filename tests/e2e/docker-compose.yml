@@ -27,7 +27,7 @@ services:
     image: nginx:alpine
     container_name: e2e-jwks
     volumes:
-      - ./jwks/jwks.json:/usr/share/nginx/html/.well-known/jwks.json:ro
+      - ./jwks/.well-known:/usr/share/nginx/html/.well-known:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost/.well-known/jwks.json || exit 1"]
       interval: 3s
