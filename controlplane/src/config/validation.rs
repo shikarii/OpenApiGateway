@@ -6,6 +6,7 @@ use url::Url;
 
 const VALID_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"];
 const VALID_KEY_BY: &[&str] = &["ip", "sub"];
+const VALID_PLUGIN_FAIL_MODES: &[&str] = &["closed", "open"];
 
 /// Validate a parsed [`GatewayConfig`], collecting all errors.
 ///
@@ -100,6 +101,19 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
     // Gateway address format
     validate_host_port(&cfg.gateway.listen_address, "gateway.listen_address", errs);
     validate_host_port(&cfg.gateway.admin_address, "gateway.admin_address", errs);
+    if let Some(ref extauthz_address) = cfg.gateway.extauthz_address {
+        validate_host_port(extauthz_address, "gateway.extauthz_address", errs);
+    }
+    if cfg.xds.enabled {
+        validate_host_port(&cfg.xds.listen_address, "xds.listen_address", errs);
+    }
+    if cfg.ext_proc.enabled {
+        validate_host_port(
+            &cfg.ext_proc.listen_address,
+            "ext_proc.listen_address",
+            errs,
+        );
+    }
 
     // Auth providers
     for p in &cfg.auth.providers {
@@ -133,6 +147,7 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
     // Routes
     for r in &cfg.routes {
         let prefix = format!("routes[{}]", r.name);
+        let mut plugin_names = HashSet::new();
 
         if r.name.is_empty() {
             errs.push(ConfigError::InvalidValue {
@@ -189,6 +204,16 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
                 reason: format!("must be one of: {}", VALID_KEY_BY.join(", ")),
             });
         }
+
+        for plugin in &r.plugins {
+            validate_plugin_instance(plugin, &format!("{prefix}.plugins"), errs);
+            if !plugin_names.insert(plugin.name.as_str()) {
+                errs.push(ConfigError::DuplicateName {
+                    kind: "route plugin",
+                    name: format!("{}:{}", r.name, plugin.name),
+                });
+            }
+        }
     }
 
     // Services
@@ -227,6 +252,44 @@ fn check_value_constraints(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
             reason: "must be between 0.0 and 1.0".into(),
         });
     }
+
+    if cfg.plugins.enabled {
+        if cfg.plugins.directory.trim().is_empty() {
+            errs.push(ConfigError::InvalidValue {
+                field: "plugins.directory".into(),
+                reason: "must not be empty when plugins are enabled".into(),
+            });
+        }
+        if cfg.plugins.limits.max_memory_bytes == 0 {
+            errs.push(ConfigError::InvalidValue {
+                field: "plugins.limits.max_memory_bytes".into(),
+                reason: "must be > 0".into(),
+            });
+        }
+        if cfg.plugins.limits.max_instructions == 0 {
+            errs.push(ConfigError::InvalidValue {
+                field: "plugins.limits.max_instructions".into(),
+                reason: "must be > 0".into(),
+            });
+        }
+        if cfg.plugins.limits.chain_timeout_ms == 0 {
+            errs.push(ConfigError::InvalidValue {
+                field: "plugins.limits.chain_timeout_ms".into(),
+                reason: "must be > 0".into(),
+            });
+        }
+    }
+
+    let mut global_plugin_names = HashSet::new();
+    for plugin in &cfg.plugins.global {
+        validate_plugin_instance(plugin, "plugins.global", errs);
+        if !global_plugin_names.insert(plugin.name.as_str()) {
+            errs.push(ConfigError::DuplicateName {
+                kind: "global plugin",
+                name: plugin.name.clone(),
+            });
+        }
+    }
 }
 
 fn check_conditional_requirements(cfg: &GatewayConfig, errs: &mut Vec<ConfigError>) {
@@ -254,6 +317,26 @@ fn check_conditional_requirements(cfg: &GatewayConfig, errs: &mut Vec<ConfigErro
         errs.push(ConfigError::MissingConditional {
             field: "observability.tracing.otlp_endpoint".into(),
             reason: "required when tracing is enabled".into(),
+        });
+    }
+}
+
+fn validate_plugin_instance(
+    plugin: &shared::config_types::PluginInstance,
+    field_prefix: &str,
+    errs: &mut Vec<ConfigError>,
+) {
+    if plugin.name.trim().is_empty() {
+        errs.push(ConfigError::InvalidValue {
+            field: format!("{field_prefix}[].name"),
+            reason: "must not be empty".into(),
+        });
+    }
+
+    if !VALID_PLUGIN_FAIL_MODES.contains(&plugin.fail_mode.as_str()) {
+        errs.push(ConfigError::InvalidValue {
+            field: format!("{field_prefix}[{}].fail_mode", plugin.name),
+            reason: format!("must be one of: {}", VALID_PLUGIN_FAIL_MODES.join(", ")),
         });
     }
 }

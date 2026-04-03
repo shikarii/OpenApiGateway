@@ -8,7 +8,9 @@ use tokio::sync::{RwLock, Semaphore};
 
 use crate::auth::JwksCacheRegistry;
 use crate::observability::MetricsRegistry;
+use crate::plugins::PluginEngine;
 use crate::ratelimit::RateLimiter;
+use crate::xds::XdsControlPlane;
 
 /// Shared application state for the admin API.
 pub(crate) type SharedState = Arc<AppState>;
@@ -23,6 +25,8 @@ pub(crate) struct AppState {
     pub metrics: Arc<MetricsRegistry>,
     pub concurrency_limit: Arc<Semaphore>,
     pub tracing_enabled: bool,
+    pub plugin_engine: Option<Arc<PluginEngine>>,
+    pub xds: Option<Arc<XdsControlPlane>>,
 }
 
 /// Mutable config state protected by a `RwLock`.
@@ -67,6 +71,8 @@ pub(crate) fn now_unix() -> i64 {
 }
 
 /// Build initial [`AppState`] from a loaded config and its raw YAML bytes.
+// Reason: bootstrap needs to assemble the full long-lived application state in one place.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_state(
     config: GatewayConfig,
     raw_yaml: &[u8],
@@ -75,6 +81,8 @@ pub(crate) fn build_state(
     jwks_registry: Arc<JwksCacheRegistry>,
     rate_limiter: Arc<RateLimiter>,
     metrics: Arc<MetricsRegistry>,
+    plugin_engine: Option<Arc<PluginEngine>>,
+    xds: Option<Arc<XdsControlPlane>>,
 ) -> SharedState {
     let sha256 = sha256_hex(raw_yaml);
     let now = now_unix();
@@ -101,6 +109,8 @@ pub(crate) fn build_state(
         metrics,
         concurrency_limit,
         tracing_enabled,
+        plugin_engine,
+        xds,
     })
 }
 

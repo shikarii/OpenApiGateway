@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.http.ext_authz.v3;
+
+message ExtAuthz {
+  string grpc_service = 1;
+}

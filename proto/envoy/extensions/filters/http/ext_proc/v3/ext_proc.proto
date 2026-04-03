@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.http.ext_proc.v3;
+
+message ExtProc {
+  string grpc_service = 1;
+}

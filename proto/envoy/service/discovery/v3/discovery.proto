@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package envoy.service.discovery.v3;
+
+import "google/protobuf/any.proto";
+import "envoy/config/core/v3/base.proto";
+
+message ErrorDetail {
+  string message = 1;
+}
+
+message DiscoveryRequest {
+  string version_info = 1;
+  envoy.config.core.v3.Node node = 2;
+  repeated string resource_names = 3;
+  string type_url = 4;
+  string response_nonce = 5;
+  ErrorDetail error_detail = 6;
+}
+
+message DiscoveryResponse {
+  string version_info = 1;
+  repeated google.protobuf.Any resources = 2;
+  string type_url = 3;
+  string nonce = 4;
+}

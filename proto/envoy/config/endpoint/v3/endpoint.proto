@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package envoy.config.endpoint.v3;
+
+import "envoy/config/core/v3/base.proto";
+
+message Endpoint {
+  envoy.config.core.v3.Address address = 1;
+}
+
+message LbEndpoint {
+  Endpoint endpoint = 1;
+}
+
+message LocalityLbEndpoints {
+  repeated LbEndpoint lb_endpoints = 1;
+}
+
+message ClusterLoadAssignment {
+  string cluster_name = 1;
+  repeated LocalityLbEndpoints endpoints = 2;
+}

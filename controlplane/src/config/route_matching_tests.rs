@@ -41,6 +41,9 @@ fn config_with_routes(routes: Vec<RouteConfig>, services: Vec<ServiceConfig>) ->
                 sample_rate: 0.0,
             },
         },
+        plugins: PluginsConfig::default(),
+        xds: XdsConfig::default(),
+        ext_proc: ExtProcConfig::default(),
     }
 }
 
@@ -63,6 +66,7 @@ fn make_route(name: &str, hostnames: Vec<&str>, path: &str, service: &str) -> Ro
             request_timeout_ms: 5000,
             retries: 0,
         },
+        plugins: vec![],
     }
 }
 

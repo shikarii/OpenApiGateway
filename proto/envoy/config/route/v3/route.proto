@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package envoy.config.route.v3;
+
+import "google/protobuf/duration.proto";
+
+message RouteConfiguration {
+  string name = 1;
+  repeated VirtualHost virtual_hosts = 2;
+}
+
+message VirtualHost {
+  string name = 1;
+  repeated string domains = 2;
+  repeated Route routes = 3;
+}
+
+message Route {
+  RouteMatch match = 1;
+  RouteAction route = 2;
+}
+
+message RouteMatch {
+  string prefix = 1;
+}
+
+message RetryPolicy {
+  string retry_on = 1;
+  uint32 num_retries = 2;
+}
+
+message RouteAction {
+  string cluster = 1;
+  google.protobuf.Duration timeout = 2;
+  RetryPolicy retry_policy = 3;
+}

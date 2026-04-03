@@ -55,6 +55,7 @@ fn valid_config() -> GatewayConfig {
                 request_timeout_ms: 5000,
                 retries: 1,
             },
+            plugins: vec![],
         }],
         services: vec![ServiceConfig {
             name: "backend".into(),
@@ -74,6 +75,9 @@ fn valid_config() -> GatewayConfig {
                 sample_rate: 0.0,
             },
         },
+        plugins: PluginsConfig::default(),
+        xds: XdsConfig::default(),
+        ext_proc: ExtProcConfig::default(),
     }
 }
 
@@ -118,6 +122,7 @@ fn valid_full_config_all_optional_fields() {
             request_timeout_ms: 3000,
             retries: 2,
         },
+        plugins: vec![],
     });
     assert!(validate(&cfg).is_ok());
 }

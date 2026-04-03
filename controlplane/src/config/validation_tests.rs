@@ -56,6 +56,7 @@ fn valid_config() -> GatewayConfig {
                 request_timeout_ms: 5000,
                 retries: 1,
             },
+            plugins: vec![],
         }],
         services: vec![ServiceConfig {
             name: "backend".into(),
@@ -75,6 +76,9 @@ fn valid_config() -> GatewayConfig {
                 sample_rate: 0.0,
             },
         },
+        plugins: PluginsConfig::default(),
+        xds: XdsConfig::default(),
+        ext_proc: ExtProcConfig::default(),
     }
 }
 
@@ -324,4 +328,71 @@ fn invalid_health_check_path() {
         .errors()
         .iter()
         .any(|e| e.to_string().contains("health_check.path")));
+}
+
+#[test]
+fn plugins_require_directory_when_enabled() {
+    let mut cfg = valid_config();
+    cfg.plugins.enabled = true;
+    let err = validate(&cfg).unwrap_err();
+    assert!(err
+        .errors()
+        .iter()
+        .any(|e| e.to_string().contains("plugins.directory")));
+}
+
+#[test]
+fn invalid_plugin_fail_mode_rejected() {
+    let mut cfg = valid_config();
+    cfg.routes[0].plugins.push(PluginInstance {
+        name: "cors".into(),
+        enabled: true,
+        fail_mode: "ignore".into(),
+        config: serde_yaml::Value::Null,
+    });
+    let err = validate(&cfg).unwrap_err();
+    assert!(err
+        .errors()
+        .iter()
+        .any(|e| e.to_string().contains("fail_mode")));
+}
+
+#[test]
+fn duplicate_route_plugins_rejected() {
+    let mut cfg = valid_config();
+    let plugin = PluginInstance {
+        name: "cors".into(),
+        enabled: true,
+        fail_mode: "closed".into(),
+        config: serde_yaml::Value::Null,
+    };
+    cfg.routes[0].plugins = vec![plugin.clone(), plugin];
+    let err = validate(&cfg).unwrap_err();
+    assert!(err.errors().iter().any(|e| {
+        matches!(
+            e,
+            ConfigError::DuplicateName {
+                kind: "route plugin",
+                ..
+            }
+        )
+    }));
+}
+
+#[test]
+fn xds_and_ext_proc_addresses_validate_when_enabled() {
+    let mut cfg = valid_config();
+    cfg.xds.enabled = true;
+    cfg.xds.listen_address = "bad-address".into();
+    cfg.ext_proc.enabled = true;
+    cfg.ext_proc.listen_address = "also-bad".into();
+    let err = validate(&cfg).unwrap_err();
+    assert!(err
+        .errors()
+        .iter()
+        .any(|e| e.to_string().contains("xds.listen_address")));
+    assert!(err
+        .errors()
+        .iter()
+        .any(|e| e.to_string().contains("ext_proc.listen_address")));
 }

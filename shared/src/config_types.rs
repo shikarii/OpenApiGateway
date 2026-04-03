@@ -11,6 +11,12 @@ pub struct GatewayConfig {
     pub routes: Vec<RouteConfig>,
     pub services: Vec<ServiceConfig>,
     pub observability: ObservabilityConfig,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
+    #[serde(default)]
+    pub xds: XdsConfig,
+    #[serde(default)]
+    pub ext_proc: ExtProcConfig,
 }
 
 /// Gateway server listen addresses and timeouts.
@@ -88,6 +94,8 @@ pub struct RouteConfig {
     pub required_scopes: Option<Vec<String>>,
     pub rate_limit: RouteRateLimit,
     pub upstream: UpstreamConfig,
+    #[serde(default)]
+    pub plugins: Vec<PluginInstance>,
 }
 
 /// Per-route rate limit bucket parameters.
@@ -142,6 +150,121 @@ pub struct TracingConfig {
     pub enabled: bool,
     pub otlp_endpoint: String,
     pub sample_rate: f64,
+}
+
+/// Plugin engine settings in gateway config.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub directory: String,
+    #[serde(default)]
+    pub limits: PluginLimits,
+    #[serde(default)]
+    pub global: Vec<PluginInstance>,
+}
+
+/// Resource limits for the plugin engine.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginLimits {
+    #[serde(default = "default_plugin_max_memory_bytes")]
+    pub max_memory_bytes: usize,
+    #[serde(default = "default_plugin_max_instructions")]
+    pub max_instructions: u32,
+    #[serde(default = "default_plugin_chain_timeout_ms")]
+    pub chain_timeout_ms: u64,
+}
+
+impl Default for PluginLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: default_plugin_max_memory_bytes(),
+            max_instructions: default_plugin_max_instructions(),
+            chain_timeout_ms: default_plugin_chain_timeout_ms(),
+        }
+    }
+}
+
+/// A single plugin instance bound globally or to a route.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginInstance {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_fail_mode")]
+    pub fail_mode: String,
+    #[serde(default)]
+    pub config: serde_yaml::Value,
+}
+
+/// xDS server settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XdsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_xds_listen_address")]
+    pub listen_address: String,
+}
+
+impl Default for XdsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_address: default_xds_listen_address(),
+        }
+    }
+}
+
+/// ext_proc server settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtProcConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ext_proc_listen_address")]
+    pub listen_address: String,
+}
+
+impl Default for ExtProcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_address: default_ext_proc_listen_address(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_fail_mode() -> String {
+    "closed".to_owned()
+}
+
+fn default_plugin_max_memory_bytes() -> usize {
+    8 * 1024 * 1024
+}
+
+fn default_plugin_max_instructions() -> u32 {
+    1_000_000
+}
+
+fn default_plugin_chain_timeout_ms() -> u64 {
+    50
+}
+
+fn default_xds_listen_address() -> String {
+    "0.0.0.0:18000".to_owned()
+}
+
+fn default_ext_proc_listen_address() -> String {
+    "0.0.0.0:19000".to_owned()
 }
 
 #[cfg(test)]
@@ -216,6 +339,9 @@ observability:
         assert_eq!(cfg.routes.len(), 1);
         assert_eq!(cfg.services.len(), 1);
         assert_eq!(cfg.auth.providers.len(), 1);
+        assert!(!cfg.plugins.enabled);
+        assert!(!cfg.xds.enabled);
+        assert!(!cfg.ext_proc.enabled);
     }
 
     #[test]
@@ -254,5 +380,14 @@ observability:
 "#;
         let result = serde_yaml::from_str::<GatewayConfig>(yaml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn plugin_defaults_are_backwards_compatible() {
+        let cfg: GatewayConfig = serde_yaml::from_str(sample_yaml()).unwrap();
+        assert_eq!(cfg.plugins.directory, "");
+        assert_eq!(cfg.plugins.limits.max_memory_bytes, 8 * 1024 * 1024);
+        assert_eq!(cfg.plugins.limits.max_instructions, 1_000_000);
+        assert_eq!(cfg.plugins.limits.chain_timeout_ms, 50);
     }
 }

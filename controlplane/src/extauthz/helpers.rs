@@ -1,5 +1,6 @@
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use std::collections::HashMap;
 
 use shared::config_types::RouteConfig;
 
@@ -82,6 +83,17 @@ pub(super) fn insert_rate_limit_headers(
     let reset = now_secs + (decision.retry_after_ms / 1000).max(1);
     if let Ok(v) = reset.to_string().parse() {
         headers.insert("x-rate-limit-reset", v);
+    }
+}
+
+pub(super) fn insert_string_headers(headers: &mut HeaderMap, values: &HashMap<String, String>) {
+    for (name, value) in values {
+        if let (Ok(header_name), Ok(header_value)) = (
+            name.parse::<axum::http::HeaderName>(),
+            value.parse::<axum::http::HeaderValue>(),
+        ) {
+            headers.insert(header_name, header_value);
+        }
     }
 }
 

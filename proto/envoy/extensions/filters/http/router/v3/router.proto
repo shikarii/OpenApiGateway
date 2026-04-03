@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.http.router.v3;
+
+message Router {}

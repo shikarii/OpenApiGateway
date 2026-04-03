@@ -19,6 +19,11 @@ pub(crate) fn router(state: SharedState) -> Router {
             "/config/reload",
             axum::routing::post(handlers::config_reload),
         )
+        .route("/xds/status", axum::routing::get(handlers::xds_status))
         .route("/metrics", axum::routing::get(handlers::metrics))
         .with_state(state)
 }
+
+#[cfg(test)]
+#[path = "handlers_tests.rs"]
+mod handlers_tests;

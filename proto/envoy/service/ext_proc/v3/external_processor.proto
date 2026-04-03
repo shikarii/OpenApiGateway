@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package envoy.service.ext_proc.v3;
+
+message HeaderValue {
+  string key = 1;
+  string value = 2;
+}
+
+message HeaderValueOption {
+  HeaderValue header = 1;
+}
+
+message HeaderMutation {
+  repeated HeaderValueOption set_headers = 1;
+  repeated string remove_headers = 2;
+}
+
+message ImmediateResponse {
+  uint32 status = 1;
+  string body = 2;
+  HeaderMutation header_mutation = 3;
+}
+
+message RequestHeaders {
+  repeated HeaderValue headers = 1;
+  string method = 2;
+  string path = 3;
+}
+
+message RequestBody {
+  bytes body = 1;
+  bool end_of_stream = 2;
+}
+
+message ResponseHeaders {
+  repeated HeaderValue headers = 1;
+  uint32 status = 2;
+}
+
+message ResponseBody {
+  bytes body = 1;
+  bool end_of_stream = 2;
+}
+
+message CommonResponse {
+  HeaderMutation header_mutation = 1;
+  ImmediateResponse immediate_response = 2;
+  bool clear_route_cache = 3;
+}
+
+message HeadersResponse {
+  CommonResponse response = 1;
+}
+
+message BodyResponse {
+  CommonResponse response = 1;
+}
+
+message ProcessingRequest {
+  oneof request {
+    RequestHeaders request_headers = 1;
+    RequestBody request_body = 2;
+    ResponseHeaders response_headers = 3;
+    ResponseBody response_body = 4;
+  }
+}
+
+message ProcessingResponse {
+  oneof response {
+    HeadersResponse request_headers = 1;
+    BodyResponse request_body = 2;
+    HeadersResponse response_headers = 3;
+    BodyResponse response_body = 4;
+    ImmediateResponse immediate_response = 5;
+  }
+}
+
+service ExternalProcessor {
+  rpc Process(stream ProcessingRequest) returns (stream ProcessingResponse);
+}
