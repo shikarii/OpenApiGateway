@@ -20,8 +20,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 COMPOSE_PROJECT="e2e-gateway"
 
-ENVOY_URL="${ENVOY_URL:-http://localhost:10080}"
-ADMIN_URL="${ADMIN_URL:-http://localhost:19090}"
+ENVOY_URL="${ENVOY_URL:-http://127.0.0.1:10080}"
+ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:19090}"
 
 PASSED=0
 FAILED=0
@@ -77,7 +77,7 @@ wait_for_url() {
     local max_wait="${2:-60}"
     local elapsed=0
     while [ "$elapsed" -lt "$max_wait" ]; do
-        if curl -sf -o /dev/null "$url" 2>/dev/null; then
+        if curl -4sf -o /dev/null "$url" 2>/dev/null; then
             return 0
         fi
         sleep 2
