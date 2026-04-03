@@ -24,12 +24,12 @@ services:
       - e2e
 
   fake-jwks:
-    image: nginx:alpine
+    build:
+      context: ../..
+      dockerfile: ./tests/e2e/jwks.Dockerfile
     container_name: e2e-jwks
-    volumes:
-      - ./jwks/jwks.json:/usr/share/nginx/html/.well-known/jwks.json:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost/.well-known/jwks.json || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/jwks.json')\""]
       interval: 3s
       timeout: 2s
       retries: 10
@@ -39,13 +39,12 @@ services:
   gateway-manager:
     build:
       context: ../..
-      dockerfile: ./services/gateway-manager/Dockerfile
+      dockerfile: ./tests/e2e/gateway-manager.Dockerfile
     container_name: e2e-gateway-manager
     ports:
       - "19090:9090"
     volumes:
       - envoy-config:/app/envoy-output
-      - ./configs/gateway-test.yaml:/app/gateway.yaml:ro
     environment:
       GATEWAY_CONFIG: /app/gateway.yaml
       ENVOY_CONFIG_PATH: /app/envoy-output/envoy.yaml

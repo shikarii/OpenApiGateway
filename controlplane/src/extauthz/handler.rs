@@ -7,7 +7,9 @@ use tracing::Instrument;
 use crate::admin::state::SharedState;
 use crate::observability::generate_request_id;
 
+use super::auth_step::apply_auth;
 use super::helpers::*;
+use super::plugin_step::{execute_access_plugins, run_plugin_log, PluginExecutionMeta};
 
 /// Build the ext_authz axum router.
 ///
@@ -141,126 +143,52 @@ async fn check_inner(
     }
 
     let mut response_headers = HeaderMap::new();
-    let mut auth_subject: Option<String> = None;
+    let mut auth_subject = None;
+    let plugin_continue = match execute_access_plugins(
+        state,
+        route,
+        PluginExecutionMeta {
+            headers,
+            host,
+            method,
+            path,
+            request_id,
+            remote_addr: &remote_addr,
+            start: &start,
+        },
+        &mut response_headers,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    let plugin_request = plugin_continue.request;
+    let plugin_upstream_headers = plugin_continue.upstream_headers;
 
-    // 4. Authentication (if required).
-    if route.auth_required {
-        tracing::info!(route = %route.name, "auth_check");
-        let token = match extract_bearer(headers) {
-            Some(BearerResult::Valid(t)) => t,
-            Some(BearerResult::Malformed) => {
-                state
-                    .metrics
-                    .record_auth_failure(&route.name, "invalid_token_format");
-                return early_deny(
-                    state,
-                    request_id,
-                    &remote_addr,
-                    host,
-                    method,
-                    path,
-                    route,
-                    StatusCode::UNAUTHORIZED,
-                    "invalid_token_format",
-                    &start,
-                );
-            }
-            None => {
-                state
-                    .metrics
-                    .record_auth_failure(&route.name, "missing_token");
-                return early_deny(
-                    state,
-                    request_id,
-                    &remote_addr,
-                    host,
-                    method,
-                    path,
-                    route,
-                    StatusCode::UNAUTHORIZED,
-                    "missing_token",
-                    &start,
-                );
-            }
-        };
-
-        let provider_name = route.auth_provider.as_deref().unwrap_or("main");
-        let provider = match cfg.auth.providers.iter().find(|p| p.name == provider_name) {
-            Some(p) => p,
-            None => {
-                state
-                    .metrics
-                    .record_auth_failure(&route.name, "unknown_provider");
-                return early_deny(
-                    state,
-                    request_id,
-                    &remote_addr,
-                    host,
-                    method,
-                    path,
-                    route,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_provider_unavailable",
-                    &start,
-                );
-            }
-        };
-
-        let cache = match state.jwks_registry.get(provider_name) {
-            Some(c) => c,
-            None => {
-                state
-                    .metrics
-                    .record_auth_failure(&route.name, "unknown_provider");
-                return early_deny(
-                    state,
-                    request_id,
-                    &remote_addr,
-                    host,
-                    method,
-                    path,
-                    route,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_provider_unavailable",
-                    &start,
-                );
-            }
-        };
-
-        let required_scopes = route.required_scopes.as_deref().unwrap_or(&[]);
-        match crate::auth::validate_with_refresh(token, provider, cache, required_scopes).await {
-            Ok(identity) => {
-                tracing::Span::current().record("auth_subject", identity.sub.as_str());
-                auth_subject = Some(identity.sub.clone());
-                if let Ok(v) = identity.sub.parse() {
-                    response_headers.insert("x-auth-sub", v);
-                }
-                if let Ok(v) = identity.iss.parse() {
-                    response_headers.insert("x-auth-iss", v);
-                }
-                let scopes = identity.scopes.join(",");
-                if let Ok(v) = scopes.parse() {
-                    response_headers.insert("x-auth-scopes", v);
-                }
-            }
-            Err(e) => {
-                state
-                    .metrics
-                    .record_auth_failure(&route.name, e.error_code());
-                return early_deny(
-                    state,
-                    request_id,
-                    &remote_addr,
-                    host,
-                    method,
-                    path,
-                    route,
-                    e.http_status(),
-                    e.error_code(),
-                    &start,
-                );
-            }
-        }
+    if let Err(deny) = apply_auth(
+        state,
+        cfg,
+        route,
+        headers,
+        &mut response_headers,
+        &mut auth_subject,
+    )
+    .await
+    {
+        run_plugin_log(state, &plugin_request, deny.status.as_u16()).await;
+        return early_deny(
+            state,
+            request_id,
+            &remote_addr,
+            host,
+            method,
+            path,
+            route,
+            deny.status,
+            &deny.error_code,
+            &start,
+        );
     }
 
     // 5. Rate limiting.
@@ -322,6 +250,7 @@ async fn check_inner(
                     status.as_u16(),
                     start.elapsed().as_millis() as f64,
                 );
+                run_plugin_log(state, &plugin_request, status.as_u16()).await;
                 return (status, response_headers).into_response();
             }
 
@@ -336,6 +265,12 @@ async fn check_inner(
         }
         Err(_) => {
             state.metrics.record_rate_limit_denied(&route.name);
+            run_plugin_log(
+                state,
+                &plugin_request,
+                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            )
+            .await;
             return early_deny(
                 state,
                 request_id,
@@ -351,6 +286,7 @@ async fn check_inner(
         }
     }
 
+    insert_string_headers(&mut response_headers, &plugin_upstream_headers);
     emit_log(
         request_id,
         &remote_addr,
@@ -367,5 +303,6 @@ async fn check_inner(
     state
         .metrics
         .record_request(&route.name, method, 200, start.elapsed().as_millis() as f64);
+    run_plugin_log(state, &plugin_request, StatusCode::OK.as_u16()).await;
     allow_response(response_headers, request_id)
 }

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package envoy.config.cluster.v3;
+
+import "google/protobuf/duration.proto";
+import "envoy/config/core/v3/base.proto";
+import "envoy/config/endpoint/v3/endpoint.proto";
+
+message Cluster {
+  string name = 1;
+  string type = 2;
+  string lb_policy = 3;
+  google.protobuf.Duration connect_timeout = 4;
+  envoy.config.endpoint.v3.ClusterLoadAssignment load_assignment = 5;
+  repeated envoy.config.core.v3.HealthCheck health_checks = 6;
+}

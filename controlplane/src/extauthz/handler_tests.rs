@@ -34,6 +34,7 @@ fn make_route(name: &str, hosts: &[&str], prefix: &str) -> RouteConfig {
             request_timeout_ms: 5000,
             retries: 0,
         },
+        plugins: vec![],
     }
 }
 
@@ -132,6 +133,8 @@ fn test_router() -> Router {
         jwks_registry,
         rate_limiter,
         metrics,
+        None,
+        None,
     );
     router(state)
 }
@@ -215,6 +218,8 @@ async fn check_overloaded_returns_503() {
         jwks_registry,
         rate_limiter,
         metrics,
+        None,
+        None,
     );
     // Reconstruct with zero permits to simulate overload.
     let overloaded_state = Arc::new(crate::admin::state::AppState {
@@ -226,6 +231,8 @@ async fn check_overloaded_returns_503() {
         metrics: Arc::clone(&state.metrics),
         concurrency_limit: Arc::new(Semaphore::new(0)),
         tracing_enabled: false,
+        plugin_engine: None,
+        xds: None,
     });
 
     let app = router(overloaded_state);

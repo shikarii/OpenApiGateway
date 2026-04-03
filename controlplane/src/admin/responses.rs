@@ -44,3 +44,11 @@ pub(crate) struct ReloadErrorResponse {
     pub error: String,
     pub reload_timestamp: i64,
 }
+
+/// Response for `GET /xds/status`.
+#[derive(Debug, Serialize)]
+pub(crate) struct XdsStatusResponse {
+    pub enabled: bool,
+    pub connected_envoys: usize,
+    pub peers: Vec<crate::xds::EnvoyConnectionStatus>,
+}

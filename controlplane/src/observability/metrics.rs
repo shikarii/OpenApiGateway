@@ -27,6 +27,7 @@ fn status_class(status: u16) -> &'static str {
 ///
 /// All counter and histogram operations are internally atomic, so no
 /// external locking is needed. Store as `Arc<MetricsRegistry>` in app state.
+#[derive(Debug)]
 pub(crate) struct MetricsRegistry {
     registry: Registry,
     http_requests_total: CounterVec,
@@ -40,6 +41,15 @@ pub(crate) struct MetricsRegistry {
     config_reload_total: CounterVec,
     inflight_requests: IntGauge,
     overload_total: IntCounter,
+    plugin_duration_us: HistogramVec,
+    plugin_errors_total: CounterVec,
+    plugin_chain_duration_us: HistogramVec,
+    plugin_short_circuits_total: CounterVec,
+    xds_connected_envoys: IntGauge,
+    xds_acks_total: IntCounter,
+    xds_nacks_total: IntCounter,
+    xds_snapshot_version: IntGauge,
+    xds_push_duration_seconds: prometheus::Histogram,
 }
 
 /// Histogram buckets for request duration (milliseconds).
@@ -124,6 +134,48 @@ impl MetricsRegistry {
             "Requests rejected due to gateway overload",
         )?;
 
+        let plugin_duration_us = HistogramVec::new(
+            HistogramOpts::new(
+                "gateway_plugin_duration_us",
+                "Per-plugin execution time in microseconds",
+            ),
+            &["plugin", "route", "phase"],
+        )?;
+
+        let plugin_errors_total = CounterVec::new(
+            Opts::new("gateway_plugin_errors_total", "Plugin runtime failures"),
+            &["plugin", "route", "error_type"],
+        )?;
+
+        let plugin_chain_duration_us = HistogramVec::new(
+            HistogramOpts::new(
+                "gateway_plugin_chain_duration_us",
+                "Total plugin chain duration in microseconds",
+            ),
+            &["route"],
+        )?;
+
+        let plugin_short_circuits_total = CounterVec::new(
+            Opts::new(
+                "gateway_plugin_short_circuits_total",
+                "Requests short-circuited by plugins",
+            ),
+            &["plugin", "route", "status"],
+        )?;
+
+        let xds_connected_envoys = IntGauge::new(
+            "xds_connected_envoys",
+            "Currently connected Envoy xDS clients",
+        )?;
+        let xds_acks_total = IntCounter::new("xds_acks_total", "xDS ACKs received")?;
+        let xds_nacks_total = IntCounter::new("xds_nacks_total", "xDS NACKs received")?;
+        let xds_snapshot_version =
+            IntGauge::new("xds_snapshot_version", "Current xDS snapshot version")?;
+        let xds_push_duration_seconds = prometheus::Histogram::with_opts(HistogramOpts::new(
+            "xds_push_duration_seconds",
+            "xDS push broadcast duration in seconds",
+        ))?;
+
         registry.register(Box::new(http_requests_total.clone()))?;
         registry.register(Box::new(http_request_duration_ms.clone()))?;
         registry.register(Box::new(auth_failures_total.clone()))?;
@@ -134,6 +186,15 @@ impl MetricsRegistry {
         registry.register(Box::new(config_reload_total.clone()))?;
         registry.register(Box::new(inflight_requests.clone()))?;
         registry.register(Box::new(overload_total.clone()))?;
+        registry.register(Box::new(plugin_duration_us.clone()))?;
+        registry.register(Box::new(plugin_errors_total.clone()))?;
+        registry.register(Box::new(plugin_chain_duration_us.clone()))?;
+        registry.register(Box::new(plugin_short_circuits_total.clone()))?;
+        registry.register(Box::new(xds_connected_envoys.clone()))?;
+        registry.register(Box::new(xds_acks_total.clone()))?;
+        registry.register(Box::new(xds_nacks_total.clone()))?;
+        registry.register(Box::new(xds_snapshot_version.clone()))?;
+        registry.register(Box::new(xds_push_duration_seconds.clone()))?;
 
         Ok(Self {
             registry,
@@ -147,6 +208,15 @@ impl MetricsRegistry {
             config_reload_total,
             inflight_requests,
             overload_total,
+            plugin_duration_us,
+            plugin_errors_total,
+            plugin_chain_duration_us,
+            plugin_short_circuits_total,
+            xds_connected_envoys,
+            xds_acks_total,
+            xds_nacks_total,
+            xds_snapshot_version,
+            xds_push_duration_seconds,
         })
     }
 
@@ -215,6 +285,65 @@ impl MetricsRegistry {
     /// Record a gateway overload rejection.
     pub(crate) fn record_overload(&self) {
         self.overload_total.inc();
+    }
+
+    /// Record one plugin invocation duration.
+    pub(crate) fn record_plugin_duration(
+        &self,
+        plugin: &str,
+        route: &str,
+        phase: &str,
+        duration_us: u64,
+    ) {
+        self.plugin_duration_us
+            .with_label_values(&[plugin, route, phase])
+            .observe(duration_us as f64);
+    }
+
+    /// Record a plugin error.
+    pub(crate) fn record_plugin_error(&self, plugin: &str, route: &str, error_type: &str) {
+        self.plugin_errors_total
+            .with_label_values(&[plugin, route, error_type])
+            .inc();
+    }
+
+    /// Record total chain duration.
+    pub(crate) fn record_plugin_chain_duration(&self, route: &str, duration_us: u64) {
+        self.plugin_chain_duration_us
+            .with_label_values(&[route])
+            .observe(duration_us as f64);
+    }
+
+    /// Record a plugin short-circuit response.
+    pub(crate) fn record_plugin_short_circuit(&self, plugin: &str, route: &str, status: u16) {
+        self.plugin_short_circuits_total
+            .with_label_values(&[plugin, route, &status.to_string()])
+            .inc();
+    }
+
+    /// Update the connected Envoy gauge.
+    pub(crate) fn set_xds_connected_envoys(&self, count: i64) {
+        self.xds_connected_envoys.set(count);
+    }
+
+    /// Record an xDS ACK.
+    pub(crate) fn record_xds_ack(&self) {
+        self.xds_acks_total.inc();
+    }
+
+    /// Record an xDS NACK.
+    pub(crate) fn record_xds_nack(&self) {
+        self.xds_nacks_total.inc();
+    }
+
+    /// Update the published xDS snapshot version.
+    pub(crate) fn set_xds_snapshot_version(&self, version: i64) {
+        self.xds_snapshot_version.set(version);
+    }
+
+    /// Record xDS push duration.
+    pub(crate) fn record_xds_push(&self, duration_seconds: f64) {
+        self.xds_push_duration_seconds.observe(duration_seconds);
     }
 
     /// Encode all metrics as Prometheus text exposition format.

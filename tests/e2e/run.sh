@@ -20,8 +20,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 COMPOSE_PROJECT="e2e-gateway"
 
-ENVOY_URL="${ENVOY_URL:-http://localhost:10080}"
-ADMIN_URL="${ADMIN_URL:-http://localhost:19090}"
+ENVOY_URL="${ENVOY_URL:-http://envoy:8080}"
+ADMIN_URL="${ADMIN_URL:-http://gateway-manager:9090}"
 
 PASSED=0
 FAILED=0
@@ -44,6 +44,13 @@ trap cleanup EXIT
 
 log() { echo "--- $*"; }
 
+dump_stack_diagnostics() {
+    log "Docker compose status:"
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" ps || true
+    log "Relevant container logs:"
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs fake-jwks gateway-manager envoy || true
+}
+
 pass() {
     PASSED=$((PASSED + 1))
     TOTAL=$((TOTAL + 1))
@@ -63,14 +70,60 @@ skip() {
     echo "  SKIP: $1"
 }
 
+network_request() {
+    local method="$1"
+    local url="$2"
+    local body="${3:-}"
+    local content_type="${4:-}"
+
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T \
+        -e HTTP_METHOD="$method" \
+        -e HTTP_URL="$url" \
+        -e HTTP_BODY="$body" \
+        -e HTTP_CONTENT_TYPE="$content_type" \
+        fake-jwks \
+        python - <<'PY'
+import os
+import sys
+import urllib.error
+import urllib.request
+
+method = os.environ["HTTP_METHOD"]
+url = os.environ["HTTP_URL"]
+body = os.environ.get("HTTP_BODY", "")
+content_type = os.environ.get("HTTP_CONTENT_TYPE", "")
+data = body.encode() if body else None
+
+request = urllib.request.Request(url, data=data, method=method)
+if content_type:
+    request.add_header("Content-Type", content_type)
+
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response_body = response.read()
+        status_code = response.getcode()
+except urllib.error.HTTPError as error:
+    response_body = error.read()
+    status_code = error.code
+
+sys.stdout.buffer.write(response_body)
+sys.stdout.write("\n")
+sys.stdout.write(str(status_code))
+PY
+}
+
 # Poll a URL until it returns HTTP 200, or timeout.
 # Usage: wait_for_url <url> <max_seconds>
 wait_for_url() {
     local url="$1"
     local max_wait="${2:-60}"
     local elapsed=0
+    local response
+    local http_code
     while [ "$elapsed" -lt "$max_wait" ]; do
-        if curl -sf -o /dev/null "$url" 2>/dev/null; then
+        response=$(network_request GET "$url")
+        http_code=$(echo "$response" | tail -n1)
+        if [ "$http_code" = "200" ]; then
             return 0
         fi
         sleep 2
@@ -101,19 +154,22 @@ start_stack() {
         docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build --quiet 2>&1
     fi
 
-    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d
+    if ! docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d; then
+        dump_stack_diagnostics
+        exit 1
+    fi
 
     log "Waiting for admin API to be healthy..."
     if ! wait_for_url "$ADMIN_URL/healthz" 90; then
         log "Admin API failed to start. Container logs:"
-        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs gateway-manager
+        dump_stack_diagnostics
         exit 1
     fi
 
     log "Waiting for Envoy to accept traffic..."
     if ! wait_for_url "$ENVOY_URL/public/" 45; then
         log "Envoy failed to start. Container logs:"
-        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs envoy
+        dump_stack_diagnostics
         exit 1
     fi
 
@@ -126,8 +182,7 @@ start_stack() {
 
 test_public_route_returns_200() {
     local response http_code
-    response=$(curl -s -w "\n%{http_code}" -X POST "$ENVOY_URL/public/echo" \
-        -H "Content-Type: application/json" -d '{"msg":"hello"}')
+    response=$(network_request POST "$ENVOY_URL/public/echo" '{"msg":"hello"}' "application/json")
     http_code=$(echo "$response" | tail -n1)
 
     if [ "$http_code" = "200" ]; then
@@ -138,8 +193,9 @@ test_public_route_returns_200() {
 }
 
 test_unknown_route_returns_404() {
-    local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" "$ENVOY_URL/nonexistent/path")
+    local response http_code
+    response=$(network_request GET "$ENVOY_URL/nonexistent/path")
+    http_code=$(echo "$response" | tail -n1)
 
     if [ "$http_code" = "404" ]; then
         pass "Unknown route returns 404"
@@ -154,7 +210,7 @@ test_unknown_route_returns_404() {
 
 test_healthz_returns_200() {
     local response http_code body
-    response=$(curl -s -w "\n%{http_code}" "$ADMIN_URL/healthz")
+    response=$(network_request GET "$ADMIN_URL/healthz")
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n1)
 
@@ -174,7 +230,7 @@ test_healthz_returns_200() {
 
 test_readyz_returns_healthy() {
     local body
-    body=$(curl -s "$ADMIN_URL/readyz")
+    body=$(network_request GET "$ADMIN_URL/readyz" | sed '$d')
 
     local config_loaded redis_ok
     config_loaded=$(json_field "$body" "config_loaded")
@@ -189,7 +245,7 @@ test_readyz_returns_healthy() {
 
 test_config_status_valid_json() {
     local body
-    body=$(curl -s "$ADMIN_URL/config/status")
+    body=$(network_request GET "$ADMIN_URL/config/status" | sed '$d')
 
     local version sha256 reload_result
     version=$(json_field "$body" "active_config_version")
@@ -211,7 +267,7 @@ test_config_status_valid_json() {
 
 test_config_reload_succeeds() {
     local response http_code body
-    response=$(curl -s -w "\n%{http_code}" -X POST "$ADMIN_URL/config/reload")
+    response=$(network_request POST "$ADMIN_URL/config/reload")
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n1)
 
@@ -231,7 +287,7 @@ test_config_reload_succeeds() {
 
 test_metrics_returns_prometheus() {
     local response http_code body
-    response=$(curl -s -w "\n%{http_code}" "$ADMIN_URL/metrics")
+    response=$(network_request GET "$ADMIN_URL/metrics")
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | sed '$d')
 
@@ -260,7 +316,7 @@ test_readiness_degrades_when_redis_stops() {
     sleep 3
 
     local body redis_ok
-    body=$(curl -s "$ADMIN_URL/readyz")
+    body=$(network_request GET "$ADMIN_URL/readyz" | sed '$d')
     redis_ok=$(json_field "$body" "redis_ok")
 
     if [ "$redis_ok" = "false" ]; then
@@ -281,7 +337,7 @@ test_readiness_recovers_when_redis_restarts() {
         sleep 2
         elapsed=$((elapsed + 2))
         local body
-        body=$(curl -s "$ADMIN_URL/readyz")
+        body=$(network_request GET "$ADMIN_URL/readyz" | sed '$d')
         redis_ok=$(json_field "$body" "redis_ok")
         if [ "$redis_ok" = "true" ]; then
             break

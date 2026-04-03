@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package envoy.config.listener.v3;
+
+import "google/protobuf/any.proto";
+import "envoy/config/core/v3/base.proto";
+
+message Filter {
+  string name = 1;
+  google.protobuf.Any typed_config = 2;
+}
+
+message FilterChain {
+  repeated Filter filters = 1;
+}
+
+message Listener {
+  string name = 1;
+  envoy.config.core.v3.Address address = 2;
+  repeated FilterChain filter_chains = 3;
+}

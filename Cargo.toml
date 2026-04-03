@@ -21,6 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tonic = "0.12"
 prost = "0.13"
+prost-types = "0.13"
 thiserror = "2"
 serde_yaml = "0.9"
 url = "2"
@@ -36,3 +37,8 @@ opentelemetry = "0.28"
 opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic", "trace"], default-features = false }
 tracing-opentelemetry = "0.29"
+mlua = { version = "0.10", features = ["luajit", "vendored", "serialize"] }
+jsonschema = { version = "0.18", default-features = false }
+dashmap = "6"
+tokio-stream = "0.1"
+futures-util = "0.3"

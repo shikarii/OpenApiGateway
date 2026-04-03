@@ -13,6 +13,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
 serde_yaml = { workspace = true }
 url = { workspace = true }
 axum = { workspace = true }
@@ -27,7 +28,16 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+mlua = { workspace = true }
+jsonschema = { workspace = true }
+dashmap = { workspace = true }
+tokio-stream = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"

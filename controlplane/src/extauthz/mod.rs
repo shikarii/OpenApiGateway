@@ -1,7 +1,9 @@
 // External authorization subsystem: HTTP ext_authz service for Envoy.
 // Handles per-request auth validation, rate limiting, and overload protection.
+mod auth_step;
 mod handler;
 mod helpers;
+mod plugin_step;
 
 pub(crate) use handler::router;
 

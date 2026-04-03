@@ -1,0 +1,37 @@
+node:
+  id: "envoy-local"
+  cluster: "openapi-gateway"
+
+dynamic_resources:
+  ads_config:
+    api_type: GRPC
+    transport_api_version: V3
+    grpc_services:
+      - envoy_grpc:
+          cluster_name: gateway_xds
+  lds_config:
+    ads: {}
+  cds_config:
+    ads: {}
+
+static_resources:
+  clusters:
+    - name: gateway_xds
+      type: STRICT_DNS
+      connect_timeout: 1s
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: gateway_xds
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 18000
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
