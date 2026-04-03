@@ -40,3 +40,4 @@ tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 tonic-build = "0.12"
+protoc-bin-vendored = "3"

@@ -15,8 +15,8 @@ The gateway roadmap now requires three related capabilities:
    can inspect downstream and upstream traffic.
 
 These introduce new dependencies (`mlua`, `jsonschema`, `dashmap`,
-`prost-types`, `tonic-build`) and two new transport layers (`xDS` ADS and
-Envoy `ext_proc`).
+`prost-types`, `tonic-build`, `protoc-bin-vendored`) and two new transport
+layers (`xDS` ADS and Envoy `ext_proc`).
 
 ## Decision
 
@@ -26,7 +26,8 @@ Adopt a combined extensibility and control-plane foundation with these choices:
 - Keep one thread-local Lua VM per worker thread and rebuild plugin chains
   atomically on config reload.
 - Vendor the required Envoy and protobuf definitions in `proto/` and
-  generate Rust types at build time with `tonic-build`.
+  generate Rust types at build time with `tonic-build` plus a vendored
+  `protoc` binary.
 - Implement state-of-the-world ADS first for xDS pushes.
 - Run `ext_proc` as a separate tonic streaming service alongside the
   existing HTTP `ext_authz` server.
