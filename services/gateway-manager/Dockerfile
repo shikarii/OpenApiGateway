@@ -1,6 +1,7 @@
 FROM rust:bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+COPY proto/ proto/
 COPY shared/ shared/
 COPY controlplane/ controlplane/
 COPY dataplane/ dataplane/
