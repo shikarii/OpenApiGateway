@@ -225,6 +225,20 @@ fn ext_authz_filter_present_when_configured() {
     let sa = &ep["endpoint"]["address"]["socket_address"];
     assert_eq!(sa["address"].as_str().unwrap(), "127.0.0.1");
     assert_eq!(sa["port_value"].as_u64().unwrap(), 10003);
+
+    let ext_authz = &filters[0]["typed_config"]["http_service"];
+    assert_eq!(
+        ext_authz["authorization_request"]["allowed_headers"]["patterns"][0]["prefix"]
+            .as_str()
+            .unwrap(),
+        ""
+    );
+    assert_eq!(
+        ext_authz["authorization_response"]["allowed_upstream_headers"]["patterns"][0]["prefix"]
+            .as_str()
+            .unwrap(),
+        ""
+    );
 }
 
 #[test]

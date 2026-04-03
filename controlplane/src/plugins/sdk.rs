@@ -13,20 +13,80 @@ pub(crate) struct RuntimeState {
     pub upstream_headers: HashMap<String, String>,
     pub response_headers: HashMap<String, String>,
     pub short_circuit: Option<PluginExit>,
+    path: String,
+    query_params: Vec<(String, String)>,
+    path_dirty: bool,
 }
 
 impl RuntimeState {
-    pub fn new() -> Self {
+    pub fn new(request: &PluginRequest<'_>) -> Self {
         Self {
             upstream_headers: HashMap::new(),
             response_headers: HashMap::new(),
             short_circuit: None,
+            path: request.path.to_owned(),
+            query_params: request.query_params.clone(),
+            path_dirty: false,
         }
+    }
+
+    fn set_path(&mut self, path: String) {
+        if let Some((next_path, raw_query)) = path.split_once('?') {
+            self.path = normalize_path(next_path);
+            self.query_params = parse_query_params(raw_query);
+        } else {
+            self.path = normalize_path(&path);
+        }
+        self.path_dirty = true;
+        self.sync_path_header();
+    }
+
+    fn set_query_param(&mut self, name: String, value: String) {
+        if let Some((_, current_value)) = self
+            .query_params
+            .iter_mut()
+            .find(|(current_name, _)| current_name == &name)
+        {
+            *current_value = value;
+        } else {
+            self.query_params.push((name, value));
+        }
+        self.path_dirty = true;
+        self.sync_path_header();
+    }
+
+    fn remove_query_param(&mut self, name: &str) {
+        self.query_params
+            .retain(|(current_name, _)| current_name != name);
+        self.path_dirty = true;
+        self.sync_path_header();
+    }
+
+    fn sync_path_header(&mut self) {
+        if !self.path_dirty {
+            self.upstream_headers.remove(":path");
+            return;
+        }
+
+        let mut rewritten = self.path.clone();
+        if !self.query_params.is_empty() {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            for (name, value) in &self.query_params {
+                serializer.append_pair(name, value);
+            }
+            rewritten.push('?');
+            rewritten.push_str(&serializer.finish());
+        }
+        self.upstream_headers.insert(":path".to_owned(), rewritten);
     }
 }
 
 pub(crate) fn is_exit_error(error: &mlua::Error) -> bool {
-    matches!(error, mlua::Error::RuntimeError(message) if message == EXIT_SENTINEL)
+    match error {
+        mlua::Error::RuntimeError(message) => message.contains(EXIT_SENTINEL),
+        mlua::Error::CallbackError { cause, .. } => is_exit_error(cause),
+        _ => false,
+    }
 }
 
 pub(crate) fn install_gateway(
@@ -74,10 +134,25 @@ fn build_request_api(lua: &Lua, request: &PluginRequest<'_>) -> LuaResult<Table>
         "get_path",
         lua.create_function(move |_, ()| Ok(path.clone()))?,
     )?;
+    let query_params = request.query_params.clone();
+    table.set(
+        "get_query",
+        lua.create_function(move |_, name: String| {
+            Ok(query_params
+                .iter()
+                .find(|(key, _)| key == &name)
+                .map(|(_, value)| value.clone()))
+        })?,
+    )?;
     let host = request.host.to_owned();
     table.set(
         "get_host",
         lua.create_function(move |_, ()| Ok(host.clone()))?,
+    )?;
+    let client_ip = request.client_ip.to_owned();
+    table.set(
+        "get_client_ip",
+        lua.create_function(move |_, ()| Ok(client_ip.clone()))?,
     )?;
     Ok(table)
 }
@@ -116,6 +191,7 @@ fn build_response_api(
 fn build_service_api(lua: &Lua, runtime: Rc<RefCell<RuntimeState>>) -> LuaResult<Table> {
     let service = lua.create_table()?;
     let request = lua.create_table()?;
+    let runtime_for_headers = runtime.clone();
     request.set(
         "set_header",
         lua.create_function(move |_, (name, value): (String, String)| {
@@ -128,7 +204,35 @@ fn build_service_api(lua: &Lua, runtime: Rc<RefCell<RuntimeState>>) -> LuaResult
                     "header '{name}' is reserved and cannot be set by plugins"
                 )));
             }
-            runtime.borrow_mut().upstream_headers.insert(lower, value);
+            runtime_for_headers
+                .borrow_mut()
+                .upstream_headers
+                .insert(lower, value);
+            Ok(())
+        })?,
+    )?;
+    let runtime_for_path = runtime.clone();
+    request.set(
+        "set_path",
+        lua.create_function(move |_, path: String| {
+            runtime_for_path.borrow_mut().set_path(path);
+            Ok(())
+        })?,
+    )?;
+    let runtime_for_set_query = runtime.clone();
+    request.set(
+        "set_query_param",
+        lua.create_function(move |_, (name, value): (String, String)| {
+            runtime_for_set_query
+                .borrow_mut()
+                .set_query_param(name, value);
+            Ok(())
+        })?,
+    )?;
+    request.set(
+        "remove_query_param",
+        lua.create_function(move |_, name: String| {
+            runtime.borrow_mut().remove_query_param(&name);
             Ok(())
         })?,
     )?;
@@ -187,10 +291,30 @@ fn build_plugin_api(lua: &Lua, binding: &PluginBinding) -> LuaResult<Table> {
         "get_version",
         lua.create_function(move |_, ()| Ok(version.clone()))?,
     )?;
-    table.set("get_config", lua.to_value(&binding.config)?)?;
+    let config = lua.to_value(&binding.config)?;
+    table.set(
+        "get_config",
+        lua.create_function(move |_, ()| Ok(config.clone()))?,
+    )?;
     Ok(table)
 }
 
 pub(crate) fn clear_gateway(lua: &Lua) -> LuaResult<()> {
     lua.globals().set("gateway", Value::Nil)
+}
+
+fn normalize_path(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_owned()
+    } else if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn parse_query_params(query: &str) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(query.as_bytes())
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect()
 }

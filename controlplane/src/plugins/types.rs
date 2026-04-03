@@ -48,7 +48,9 @@ pub(crate) struct PluginRequest<'a> {
     pub host: &'a str,
     pub method: &'a str,
     pub path: &'a str,
+    pub client_ip: &'a str,
     pub headers: Vec<(String, String)>,
+    pub query_params: Vec<(String, String)>,
 }
 
 /// Result of the access phase.

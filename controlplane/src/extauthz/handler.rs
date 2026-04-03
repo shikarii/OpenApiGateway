@@ -38,6 +38,8 @@ async fn check(State(state): State<SharedState>, req: Request) -> axum::response
     state.metrics.inc_inflight();
     let (parts, _body) = req.into_parts();
     let start = std::time::Instant::now();
+    let request_path = parts.uri.path().to_owned();
+    let request_query = parts.uri.query().map(str::to_owned);
 
     // Create a tracing span (becomes an OTel span when tracing layer is active).
     let span = tracing::info_span!(
@@ -62,7 +64,8 @@ async fn check(State(state): State<SharedState>, req: Request) -> axum::response
         &state,
         &parts.headers,
         parts.method.as_str(),
-        parts.uri.path(),
+        &request_path,
+        request_query.as_deref(),
         &request_id,
     )
     .instrument(span.clone())
@@ -89,15 +92,16 @@ async fn check_inner(
     headers: &HeaderMap,
     method: &str,
     path: &str,
+    query: Option<&str>,
     request_id: &str,
 ) -> axum::response::Response {
     let start = std::time::Instant::now();
     let host = header_str(headers, "host").unwrap_or("*");
-    let remote_addr = client_ip(headers, false);
 
     let cs = state.config_state.read().await;
     let cfg = &cs.config;
     let trust_forwarded = cfg.gateway.trust_forwarded_headers;
+    let remote_addr = client_ip(headers, trust_forwarded);
 
     // 2. Route matching.
     let route = match match_route(&cfg.routes, host, path) {
@@ -127,21 +131,6 @@ async fn check_inner(
     tracing::Span::current().record("route", route.name.as_str());
     tracing::Span::current().record("upstream_service", route.upstream.service.as_str());
 
-    // 3. Method check: verify the HTTP method is allowed for this route.
-    if !route.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
-        tracing::debug!(route = %route.name, method, "method not allowed");
-        return method_denied(
-            state,
-            request_id,
-            &remote_addr,
-            host,
-            method,
-            path,
-            route,
-            &start,
-        );
-    }
-
     let mut response_headers = HeaderMap::new();
     let mut auth_subject = None;
     let plugin_continue = match execute_access_plugins(
@@ -152,6 +141,8 @@ async fn check_inner(
             host,
             method,
             path,
+            query,
+            client_ip: &remote_addr,
             request_id,
             remote_addr: &remote_addr,
             start: &start,
@@ -165,6 +156,27 @@ async fn check_inner(
     };
     let plugin_request = plugin_continue.request;
     let plugin_upstream_headers = plugin_continue.upstream_headers;
+
+    // 3. Method check: verify the HTTP method is allowed for this route.
+    if !route.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
+        tracing::debug!(route = %route.name, method, "method not allowed");
+        run_plugin_log(
+            state,
+            &plugin_request,
+            StatusCode::METHOD_NOT_ALLOWED.as_u16(),
+        )
+        .await;
+        return method_denied(
+            state,
+            request_id,
+            &remote_addr,
+            host,
+            method,
+            path,
+            route,
+            &start,
+        );
+    }
 
     if let Err(deny) = apply_auth(
         state,

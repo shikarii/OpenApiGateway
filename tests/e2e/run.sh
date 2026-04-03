@@ -51,6 +51,16 @@ dump_stack_diagnostics() {
     docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs fake-jwks gateway-manager envoy || true
 }
 
+build_stack() {
+    if docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build --quiet 2>&1; then
+        return 0
+    fi
+
+    log "Default Docker build failed; retrying with the legacy builder"
+    DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 \
+        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build 2>&1
+}
+
 pass() {
     PASSED=$((PASSED + 1))
     TOTAL=$((TOTAL + 1))
@@ -151,7 +161,7 @@ start_stack() {
     cd "$SCRIPT_DIR"
 
     if [ "${SKIP_BUILD:-0}" != "1" ]; then
-        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build --quiet 2>&1
+        build_stack
     fi
 
     if ! docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d; then

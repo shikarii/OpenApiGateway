@@ -34,7 +34,7 @@ impl PluginEngine {
                 name: "ctx".to_owned(),
                 reason: e.to_string(),
             })?;
-            let runtime_state = Rc::new(RefCell::new(RuntimeState::new()));
+            let runtime_state = Rc::new(RefCell::new(RuntimeState::new(request)));
 
             for binding in &bindings {
                 if started.elapsed().as_millis() as u64 > limits.chain_timeout_ms {
@@ -113,7 +113,7 @@ impl PluginEngine {
                 name: "ctx".to_owned(),
                 reason: e.to_string(),
             })?;
-            let runtime_state = Rc::new(RefCell::new(RuntimeState::new()));
+            let runtime_state = Rc::new(RefCell::new(RuntimeState::new(request)));
 
             for binding in &bindings {
                 let _ = run_phase(
@@ -262,3 +262,7 @@ fn plugin_instance(vm: &mut ThreadLocalVm, binding: &PluginBinding) -> Result<Ta
     vm.insert_registry_key(&binding.id, key);
     Ok(instance)
 }
+
+#[cfg(test)]
+#[path = "executor_tests.rs"]
+mod tests;

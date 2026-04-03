@@ -9,37 +9,21 @@ pub(super) fn build_ext_authz_filter() -> Value {
     server_uri.insert(val("cluster"), val("gateway_manager_extauthz"));
     server_uri.insert(val("timeout"), val("0.250s"));
 
-    let mut auth_pattern = serde_yaml::Mapping::new();
-    auth_pattern.insert(val("exact"), val("authorization"));
-    let mut host_pattern = serde_yaml::Mapping::new();
-    host_pattern.insert(val("exact"), val("host"));
-    let mut fwd_pattern = serde_yaml::Mapping::new();
-    fwd_pattern.insert(val("prefix"), val("x-forwarded-"));
+    let mut any_pattern = serde_yaml::Mapping::new();
+    any_pattern.insert(val("prefix"), val(""));
 
     let mut allowed_headers = serde_yaml::Mapping::new();
     allowed_headers.insert(
         val("patterns"),
-        Value::Sequence(vec![
-            Value::Mapping(auth_pattern),
-            Value::Mapping(host_pattern),
-            Value::Mapping(fwd_pattern),
-        ]),
+        Value::Sequence(vec![Value::Mapping(any_pattern.clone())]),
     );
     let mut auth_request = serde_yaml::Mapping::new();
     auth_request.insert(val("allowed_headers"), Value::Mapping(allowed_headers));
 
-    let mut upstream_pattern = serde_yaml::Mapping::new();
-    upstream_pattern.insert(val("prefix"), val("x-auth-"));
-    let mut rl_pattern = serde_yaml::Mapping::new();
-    rl_pattern.insert(val("prefix"), val("x-ratelimit-"));
-
     let mut allowed_upstream = serde_yaml::Mapping::new();
     allowed_upstream.insert(
         val("patterns"),
-        Value::Sequence(vec![
-            Value::Mapping(upstream_pattern),
-            Value::Mapping(rl_pattern),
-        ]),
+        Value::Sequence(vec![Value::Mapping(any_pattern)]),
     );
     let mut auth_response = serde_yaml::Mapping::new();
     auth_response.insert(
