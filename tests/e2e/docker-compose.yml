@@ -40,15 +40,12 @@ services:
   gateway-manager:
     build:
       context: ../..
-      dockerfile: ./services/gateway-manager/Dockerfile
+      dockerfile: ./tests/e2e/gateway-manager.Dockerfile
     container_name: e2e-gateway-manager
     ports:
       - "19090:9090"
     volumes:
       - envoy-config:/app/envoy-output
-    configs:
-      - source: gateway_test_config
-        target: /app/gateway.yaml
     environment:
       GATEWAY_CONFIG: /app/gateway.yaml
       ENVOY_CONFIG_PATH: /app/envoy-output/envoy.yaml
@@ -92,10 +89,6 @@ services:
 
 volumes:
   envoy-config:
-
-configs:
-  gateway_test_config:
-    file: ./configs/gateway-test.yaml
 
 networks:
   e2e:
