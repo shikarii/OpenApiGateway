@@ -46,9 +46,11 @@ services:
       - "19090:9090"
     volumes:
       - envoy-config:/app/envoy-output
-      - ./configs:/app/configs:ro
+    configs:
+      - source: gateway_test_config
+        target: /app/gateway.yaml
     environment:
-      GATEWAY_CONFIG: /app/configs/gateway-test.yaml
+      GATEWAY_CONFIG: /app/gateway.yaml
       ENVOY_CONFIG_PATH: /app/envoy-output/envoy.yaml
       RUST_LOG: controlplane=debug
     depends_on:
@@ -90,6 +92,10 @@ services:
 
 volumes:
   envoy-config:
+
+configs:
+  gateway_test_config:
+    file: ./configs/gateway-test.yaml
 
 networks:
   e2e:
