@@ -44,6 +44,13 @@ trap cleanup EXIT
 
 log() { echo "--- $*"; }
 
+dump_stack_diagnostics() {
+    log "Docker compose status:"
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" ps || true
+    log "Relevant container logs:"
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs fake-jwks gateway-manager envoy || true
+}
+
 pass() {
     PASSED=$((PASSED + 1))
     TOTAL=$((TOTAL + 1))
@@ -101,19 +108,22 @@ start_stack() {
         docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build --quiet 2>&1
     fi
 
-    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d
+    if ! docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d; then
+        dump_stack_diagnostics
+        exit 1
+    fi
 
     log "Waiting for admin API to be healthy..."
     if ! wait_for_url "$ADMIN_URL/healthz" 90; then
         log "Admin API failed to start. Container logs:"
-        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs gateway-manager
+        dump_stack_diagnostics
         exit 1
     fi
 
     log "Waiting for Envoy to accept traffic..."
     if ! wait_for_url "$ENVOY_URL/public/" 45; then
         log "Envoy failed to start. Container logs:"
-        docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" logs envoy
+        dump_stack_diagnostics
         exit 1
     fi
 
