@@ -185,3 +185,7 @@ fn validate_schema(meta: &PluginMeta, instance: &PluginInstance) -> Result<(), P
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

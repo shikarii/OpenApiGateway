@@ -17,6 +17,8 @@ pub(super) struct PluginExecutionMeta<'a> {
     pub host: &'a str,
     pub method: &'a str,
     pub path: &'a str,
+    pub query: Option<&'a str>,
+    pub client_ip: &'a str,
     pub request_id: &'a str,
     pub remote_addr: &'a str,
     pub start: &'a std::time::Instant,
@@ -33,6 +35,7 @@ pub(super) async fn execute_access_plugins<'a>(
         host: meta.host,
         method: meta.method,
         path: meta.path,
+        client_ip: meta.client_ip,
         headers: meta
             .headers
             .iter()
@@ -43,6 +46,14 @@ pub(super) async fn execute_access_plugins<'a>(
                     .map(|value| (name.as_str().to_owned(), value.to_owned()))
             })
             .collect(),
+        query_params: meta
+            .query
+            .map(|query| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .map(|(name, value)| (name.into_owned(), value.into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
 
     let Some(plugin_engine) = state.plugin_engine.as_ref() else {

@@ -12,6 +12,7 @@ use super::handler::router;
 use super::helpers::{extract_bearer, match_route, BearerResult};
 use crate::admin::state::build_state;
 use crate::config;
+use crate::plugins::PluginEngine;
 
 // --- Route matching unit tests ---
 
@@ -119,24 +120,40 @@ fn extract_bearer_empty_token() {
 
 // --- Integration tests ---
 
-fn test_router() -> Router {
-    let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
-    let cfg = config::load_config_from_str(yaml).unwrap();
+fn plugin_directory() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../plugins")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn test_router_for_config(cfg: shared::config_types::GatewayConfig) -> Router {
     let jwks_registry = crate::auth::JwksCacheRegistry::empty_for_test();
     let rate_limiter = crate::ratelimit::RateLimiter::offline_for_test(cfg.rate_limits.clone());
     let metrics = Arc::new(crate::observability::MetricsRegistry::new().unwrap());
+    let plugin_engine = if cfg.plugins.enabled {
+        Some(Arc::new(PluginEngine::from_config(&cfg).unwrap()))
+    } else {
+        None
+    };
     let state = build_state(
         cfg,
-        yaml.as_bytes(),
+        b"test",
         PathBuf::from("nonexistent.yaml"),
         None,
         jwks_registry,
         rate_limiter,
         metrics,
-        None,
+        plugin_engine,
         None,
     );
     router(state)
+}
+
+fn test_router() -> Router {
+    let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
+    let cfg = config::load_config_from_str(yaml).unwrap();
+    test_router_for_config(cfg)
 }
 
 #[tokio::test]
@@ -251,4 +268,81 @@ async fn check_overloaded_returns_503() {
     assert_eq!(resp.headers().get("x-gateway-overloaded").unwrap(), "true");
     assert_eq!(resp.headers().get("retry-after").unwrap(), "1");
     assert!(resp.headers().get("x-request-id").is_some());
+}
+
+#[tokio::test]
+async fn plugins_can_short_circuit_options_before_method_check() {
+    let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
+    let mut cfg = config::load_config_from_str(yaml).unwrap();
+    cfg.plugins.enabled = true;
+    cfg.plugins.directory = plugin_directory();
+    cfg.routes[0].plugins = vec![shared::config_types::PluginInstance {
+        name: "cors".to_owned(),
+        enabled: true,
+        fail_mode: "closed".to_owned(),
+        config: serde_yaml::from_str(
+            r#"
+origins: ["https://app.example.com"]
+methods: ["GET", "POST"]
+headers: ["authorization"]
+"#,
+        )
+        .unwrap(),
+    }];
+
+    let app = test_router_for_config(cfg);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/public/something")
+                .header("host", "example.com")
+                .header("origin", "https://app.example.com")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://app.example.com"
+    );
+}
+
+#[tokio::test]
+async fn api_key_plugin_rejects_requests_without_credentials() {
+    let yaml = include_str!("../../../examples/configs/gateway-single-node.yaml");
+    let mut cfg = config::load_config_from_str(yaml).unwrap();
+    cfg.plugins.enabled = true;
+    cfg.plugins.directory = plugin_directory();
+    cfg.routes[0].plugins = vec![shared::config_types::PluginInstance {
+        name: "api-key-auth".to_owned(),
+        enabled: true,
+        fail_mode: "closed".to_owned(),
+        config: serde_yaml::from_str(
+            r#"
+keys:
+  - key: "secret"
+    consumer: "consumer-123"
+"#,
+        )
+        .unwrap(),
+    }];
+
+    let app = test_router_for_config(cfg);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/public/something")
+                .header("host", "example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
