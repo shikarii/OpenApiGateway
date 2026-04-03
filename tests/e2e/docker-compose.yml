@@ -24,12 +24,13 @@ services:
       - e2e
 
   fake-jwks:
-    image: nginx:alpine
+    image: python:3.12-alpine
     container_name: e2e-jwks
+    command: ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/srv/jwks"]
     volumes:
-      - ./jwks/.well-known:/usr/share/nginx/html/.well-known:ro
+      - ./jwks:/srv/jwks:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost/.well-known/jwks.json || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/jwks.json')\""]
       interval: 3s
       timeout: 2s
       retries: 10

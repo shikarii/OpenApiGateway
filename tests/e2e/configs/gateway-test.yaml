@@ -13,7 +13,7 @@ auth:
     - name: "dev"
       issuer: "https://dev.example.local/"
       audience: "api-gateway"
-      jwks_uri: "http://fake-jwks/.well-known/jwks.json"
+      jwks_uri: "http://fake-jwks:8000/jwks.json"
       cache_ttl_seconds: 300
       clock_skew_seconds: 30
 
